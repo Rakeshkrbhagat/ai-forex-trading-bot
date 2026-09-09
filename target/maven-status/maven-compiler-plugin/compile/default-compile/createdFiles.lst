@@ -1,0 +1,7 @@
+com/forexbot/dto/TradeDecision.class
+com/forexbot/controller/BotConfigController.class
+com/forexbot/dto/TradeDecision$Action.class
+com/forexbot/AiForexTradingBotApplication.class
+com/forexbot/dto/BotConfig.class
+com/forexbot/dto/MarketTickRequest.class
+com/forexbot/dto/BotStatus.class
