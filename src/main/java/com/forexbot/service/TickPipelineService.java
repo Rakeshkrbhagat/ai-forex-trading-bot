@@ -28,15 +28,18 @@ public class TickPipelineService {
     private final RiskFirewall riskFirewall;
     private final GeminiService geminiService;
     private final MarketStructureFilter marketStructureFilter;
+    private final ExecutionService executionService;
 
     public TickPipelineService(BotStateManager stateManager,
                                RiskFirewall riskFirewall,
                                GeminiService geminiService,
-                               MarketStructureFilter marketStructureFilter) {
+                               MarketStructureFilter marketStructureFilter,
+                               ExecutionService executionService) {
         this.stateManager = stateManager;
         this.riskFirewall = riskFirewall;
         this.geminiService = geminiService;
         this.marketStructureFilter = marketStructureFilter;
+        this.executionService = executionService;
     }
 
     /**
@@ -81,6 +84,13 @@ public class TickPipelineService {
                 analysis.keyResistance(),
                 filter.reason()
         );
+
+        // 5) Broker dispatch: Gemini signal -> risk firewall (passed) -> MT5 order.
+        com.forexbot.dto.OrderResult execution = executionService.dispatch(decision, 0);
+        log.info("MT5 execution for trade #{} {} {}: accepted={} status={}",
+                tradeNumber, action, tick.currencyPair(),
+                execution.accepted(), execution.status());
+
         return PipelineResult.completed(decision);
     }
 
