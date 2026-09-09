@@ -179,6 +179,33 @@ else:
     st.error(f"Backend unreachable at {API_BASE_URL} - {health_msg}")
 
 with st.sidebar:
+    st.header("MT5 Broker Connection")
+    with st.form("mt5_form"):
+        mt5_login = st.text_input("Account Number", value="", placeholder="e.g. 51234567")
+        mt5_password = st.text_input("Password", value="", type="password")
+        mt5_server = st.text_input("Server Name", value="", placeholder="e.g. The5ers-Live")
+        mt5_submit = st.form_submit_button("Connect / Save Credentials", use_container_width=True)
+
+    if mt5_submit:
+        if not mt5_login.strip().isdigit():
+            st.error("Account Number must be numeric")
+        elif not mt5_password or not mt5_server.strip():
+            st.error("Password and Server Name are required")
+        else:
+            try:
+                resp = post_mt5_connect(int(mt5_login), mt5_password, mt5_server.strip())
+                if resp.ok:
+                    st.success(f"MT5 credentials saved for {mt5_server.strip()}")
+                    st.session_state["mt5_connected"] = True
+                else:
+                    st.error(f"Connect failed (HTTP {resp.status_code}): {resp.text}")
+            except requests.RequestException as exc:
+                st.error(f"Failed to reach backend: {exc}")
+
+    if st.session_state.get("mt5_connected"):
+        st.caption("MT5 credentials configured ✅")
+
+with st.sidebar:
     st.header("Bot Configuration")
 
     with st.form("config_form"):

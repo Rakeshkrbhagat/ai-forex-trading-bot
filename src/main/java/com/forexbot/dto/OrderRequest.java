@@ -19,7 +19,8 @@ public record OrderRequest(
         Double takeProfitPrice,
         int maxSlippagePoints,
         long magicNumber,
-        String comment
+        String comment,
+        Mt5Credentials credentials
 ) {
 }
 

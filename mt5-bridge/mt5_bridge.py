@@ -124,7 +124,7 @@ def order():
                         "message": "symbol, side (BUY/SELL) and positive volume are required",
                         "timestamp": _now_iso()}), 400
 
-    ok, msg = ensure_mt5()
+    ok, msg = ensure_mt5(data.get("credentials"))
     if not ok:
         log.error("Connection error: %s", msg)
         return jsonify({"accepted": False, "status": "CONNECTION_ERROR",

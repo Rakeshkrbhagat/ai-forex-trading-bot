@@ -28,9 +28,11 @@ public class ExecutionService {
 
     private final ExecutionProperties properties;
     private final WebClient bridgeClient;
+    private final Mt5CredentialStore credentialStore;
 
-    public ExecutionService(ExecutionProperties properties) {
+    public ExecutionService(ExecutionProperties properties, Mt5CredentialStore credentialStore) {
         this.properties = properties;
+        this.credentialStore = credentialStore;
         WebClient.Builder builder = WebClient.builder()
                 .baseUrl(properties.getBridgeUrl())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
@@ -54,6 +56,7 @@ public class ExecutionService {
         }
 
         double lots = volume > 0 ? volume : properties.getDefaultVolumeLots();
+        com.forexbot.dto.Mt5Credentials credentials = credentialStore.get().orElse(null);
         OrderRequest order = new OrderRequest(
                 decision.currencyPair(),
                 decision.action().name(),
@@ -65,7 +68,8 @@ public class ExecutionService {
                 decision.takeProfitPrice(),
                 properties.getMaxSlippagePoints(),
                 properties.getMagicNumber(),
-                "forexbot:" + decision.rationale()
+                "forexbot:" + decision.rationale(),
+                credentials
         );
 
         if (!properties.isEnabled()) {
