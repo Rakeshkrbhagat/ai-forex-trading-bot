@@ -1,9 +1,12 @@
 package com.forexbot.controller;
 
 import com.forexbot.dto.BotStatus;
+import com.forexbot.dto.MarketAnalysis;
 import com.forexbot.dto.MarketTickRequest;
 import com.forexbot.dto.TradeDecision;
 import com.forexbot.service.BotStateManager;
+import com.forexbot.service.GeminiService;
+import com.forexbot.service.MarketStructureFilter;
 import com.forexbot.service.RiskFirewall;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -26,10 +29,17 @@ public class TradingBotController {
 
     private final BotStateManager stateManager;
     private final RiskFirewall riskFirewall;
+    private final GeminiService geminiService;
+    private final MarketStructureFilter marketStructureFilter;
 
-    public TradingBotController(BotStateManager stateManager, RiskFirewall riskFirewall) {
+    public TradingBotController(BotStateManager stateManager,
+                                RiskFirewall riskFirewall,
+                                GeminiService geminiService,
+                                MarketStructureFilter marketStructureFilter) {
         this.stateManager = stateManager;
         this.riskFirewall = riskFirewall;
+        this.geminiService = geminiService;
+        this.marketStructureFilter = marketStructureFilter;
     }
 
     /**
@@ -78,14 +88,35 @@ public class TradingBotController {
             return ResponseEntity.status(HttpStatus.LOCKED).body(blocked);
         }
 
-        // Risk checks passed -> a trade may be evaluated/executed here.
+        // Risk checks passed -> ask Gemini for market-structure analysis.
+        String rawAnalysis = geminiService.analyzeMarketStructure(tick);
+        MarketAnalysis analysis = marketStructureFilter.parse(rawAnalysis);
+        MarketStructureFilter.FilterResult filter = marketStructureFilter.apply(analysis);
+
+        // Binary market filter: SIDEWAYS -> HOLD (blocked); TRENDING BUY/SELL -> proceed.
+        if (!filter.proceed()) {
+            TradeDecision hold = new TradeDecision(
+                    tick.currencyPair(),
+                    TradeDecision.Action.HOLD,
+                    null,
+                    null,
+                    null,
+                    filter.reason()
+            );
+            return ResponseEntity.ok(hold);
+        }
+
+        TradeDecision.Action action = filter.action() == MarketAnalysis.Direction.BUY
+                ? TradeDecision.Action.BUY
+                : TradeDecision.Action.SELL;
+
         TradeDecision decision = new TradeDecision(
                 tick.currencyPair(),
-                TradeDecision.Action.HOLD,
+                action,
                 tick.ask(),
-                null,
-                null,
-                "Tick accepted by risk firewall"
+                analysis.keySupport(),
+                analysis.keyResistance(),
+                filter.reason()
         );
         return ResponseEntity.ok(decision);
     }
