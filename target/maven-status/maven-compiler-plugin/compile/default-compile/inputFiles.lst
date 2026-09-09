@@ -5,8 +5,11 @@
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/controller/TradingBotController.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/BotConfig.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/BotStatus.java
+/Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/MarketAnalysis.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/MarketTickRequest.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/TradeDecision.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/BotStateManager.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/GeminiService.java
+/Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/MarketStructureFilter.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/RiskFirewall.java
+/Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/TickPipelineService.java

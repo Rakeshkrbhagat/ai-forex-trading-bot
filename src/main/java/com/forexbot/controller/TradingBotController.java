@@ -4,7 +4,7 @@ import com.forexbot.dto.BotStatus;
 import com.forexbot.dto.MarketTickRequest;
 import com.forexbot.dto.TradeDecision;
 import com.forexbot.service.BotStateManager;
-import com.forexbot.service.RiskFirewall;
+import com.forexbot.service.TickPipelineService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,19 +17,20 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Lifecycle endpoints for the trading bot backed by a thread-safe atomic
- * state manager. Exposes /start, /stop, /status and /tick. Every /tick is
- * guarded by the non-negotiable {@link RiskFirewall}.
+ * state manager. Exposes /start, /stop, /status and the unified /tick
+ * pipeline endpoint.
  */
 @RestController
 @RequestMapping("/api/bot")
 public class TradingBotController {
 
     private final BotStateManager stateManager;
-    private final RiskFirewall riskFirewall;
+    private final TickPipelineService tickPipeline;
 
-    public TradingBotController(BotStateManager stateManager, RiskFirewall riskFirewall) {
+    public TradingBotController(BotStateManager stateManager,
+                                TickPipelineService tickPipeline) {
         this.stateManager = stateManager;
-        this.riskFirewall = riskFirewall;
+        this.tickPipeline = tickPipeline;
     }
 
     /**
@@ -59,35 +60,17 @@ public class TradingBotController {
     }
 
     /**
-     * Processes an incoming market tick. The hardcoded risk firewall is
-     * evaluated first; if any non-negotiable limit is breached the bot halts
-     * (or the kill switch trips) and the tick is rejected with 423 LOCKED.
+     * Unified tick pipeline: validates risk limits, queries Gemini, increments
+     * thread-safe trade counters on confirmed trends, and returns a structured
+     * {@link TradeDecision}. Risk-blocked ticks return 423 LOCKED.
      */
     @PostMapping("/tick")
     public ResponseEntity<TradeDecision> processTick(@Valid @RequestBody MarketTickRequest tick) {
-        RiskFirewall.RiskCheckResult check = riskFirewall.evaluate();
-        if (!check.allowed()) {
-            TradeDecision blocked = new TradeDecision(
-                    tick.currencyPair(),
-                    TradeDecision.Action.HOLD,
-                    null,
-                    null,
-                    null,
-                    "Risk firewall blocked trade: " + check.reason()
-            );
-            return ResponseEntity.status(HttpStatus.LOCKED).body(blocked);
+        TickPipelineService.PipelineResult result = tickPipeline.process(tick);
+        if (result.riskBlocked()) {
+            return ResponseEntity.status(HttpStatus.LOCKED).body(result.decision());
         }
-
-        // Risk checks passed -> a trade may be evaluated/executed here.
-        TradeDecision decision = new TradeDecision(
-                tick.currencyPair(),
-                TradeDecision.Action.HOLD,
-                tick.ask(),
-                null,
-                null,
-                "Tick accepted by risk firewall"
-        );
-        return ResponseEntity.ok(decision);
+        return ResponseEntity.ok(result.decision());
     }
 
     private BotStatus snapshot() {

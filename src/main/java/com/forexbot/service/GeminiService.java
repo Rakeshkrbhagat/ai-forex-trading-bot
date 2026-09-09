@@ -86,14 +86,15 @@ public class GeminiService {
                 no markdown, no commentary. Use this exact schema:
                 {
                   "currencyPair": string,
-                  "trend": "BULLISH" | "BEARISH" | "RANGING",
-                  "structure": "HH_HL" | "LH_LL" | "CONSOLIDATION",
+                  "structure": "TRENDING" | "SIDEWAYS",
+                  "direction": "BUY" | "SELL" | "HOLD",
                   "keySupport": number,
                   "keyResistance": number,
-                  "suggestedAction": "BUY" | "SELL" | "HOLD",
                   "confidence": number,
                   "rationale": string
                 }
+                Rules: if the market is SIDEWAYS, direction MUST be HOLD.
+                If the market is TRENDING, direction should be BUY or SELL.
 
                 Market tick:
                 - currencyPair: %s
