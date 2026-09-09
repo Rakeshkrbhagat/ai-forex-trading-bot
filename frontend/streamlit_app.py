@@ -123,6 +123,32 @@ def post_tick(tick: dict[str, Any]) -> requests.Response:
     )
 
 
+def _mt5_url(path: str) -> str:
+    base = os.getenv("FOREXBOT_MT5_URL", "http://localhost:8080/api/mt5")
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _risk_url(path: str) -> str:
+    base = os.getenv("FOREXBOT_RISK_URL", "http://localhost:8080/api/risk")
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def post_mt5_connect(login: int, password: str, server: str) -> requests.Response:
+    """Send MT5 credentials to the backend for dynamic routing."""
+    payload = {"login": int(login), "password": password, "server": server}
+    return requests.post(
+        _mt5_url("connect"), json=payload, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
+    )
+
+
+def post_guardrails(guardrails: dict[str, Any]) -> requests.Response:
+    """Send the risk guardrails configuration to the backend."""
+    return requests.post(
+        _risk_url("guardrails"), json=guardrails, headers=_auth_headers(),
+        timeout=REQUEST_TIMEOUT,
+    )
+
+
 def render_status(status: dict[str, Any]) -> None:
     """Render a BotStatus payload as metrics."""
     col1, col2, col3 = st.columns(3)
@@ -204,6 +230,54 @@ with st.sidebar:
 
     if st.session_state.get("mt5_connected"):
         st.caption("MT5 credentials configured ✅")
+
+with st.sidebar:
+    st.header("AI Risk Guardrails")
+    st.caption("Define boundaries; the AI agent trades autonomously within them.")
+    with st.form("guardrails_form"):
+        autonomous_enabled = st.checkbox("Enable Autonomous AI Trading", value=False)
+        max_risk_percent = st.number_input(
+            "Max Risk Per Trade (%)", min_value=0.1, max_value=100.0, value=1.0, step=0.1
+        )
+        allowed_symbols_raw = st.text_input(
+            "Allowed Symbols (comma-separated)", value="EURUSD, XAUUSD"
+        )
+        max_drawdown_usd = st.number_input(
+            "Max Drawdown (USD)", min_value=1.0, value=500.0, step=10.0
+        )
+        gr_stop_loss_pips = st.number_input(
+            "Stop Loss (pips)", min_value=1, max_value=1000, value=20, step=1, key="gr_sl"
+        )
+        gr_take_profit_pips = st.number_input(
+            "Take Profit (pips)", min_value=1, max_value=2000, value=40, step=1, key="gr_tp"
+        )
+        account_balance_usd = st.number_input(
+            "Account Balance (USD)", min_value=1.0, value=10000.0, step=100.0
+        )
+        guardrails_submit = st.form_submit_button(
+            "Save Risk Guardrails", use_container_width=True
+        )
+
+    if guardrails_submit:
+        symbols = [s.strip().upper() for s in allowed_symbols_raw.split(",") if s.strip()]
+        guardrails_payload = {
+            "maxRiskPercent": float(max_risk_percent),
+            "allowedSymbols": symbols,
+            "maxDrawdownUsd": float(max_drawdown_usd),
+            "stopLossPips": int(gr_stop_loss_pips),
+            "takeProfitPips": int(gr_take_profit_pips),
+            "accountBalanceUsd": float(account_balance_usd),
+            "autonomousEnabled": bool(autonomous_enabled),
+        }
+        try:
+            resp = post_guardrails(guardrails_payload)
+            if resp.ok:
+                mode = "AUTONOMOUS" if autonomous_enabled else "manual"
+                st.success(f"Guardrails saved ({mode} mode)")
+            else:
+                st.error(f"Guardrails rejected (HTTP {resp.status_code}): {resp.text}")
+        except requests.RequestException as exc:
+            st.error(f"Failed to reach backend: {exc}")
 
 with st.sidebar:
     st.header("Bot Configuration")

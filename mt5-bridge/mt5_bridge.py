@@ -111,6 +111,34 @@ def health():
     return jsonify(payload), (200 if ok else 503)
 
 
+@app.get("/quote")
+@require_token
+def quote():
+    """Return a live tick for a symbol so the backend can ingest market data."""
+    symbol = request.args.get("symbol")
+    if not symbol:
+        return jsonify({"status": "INVALID_REQUEST", "message": "symbol is required"}), 400
+
+    ok, msg = ensure_mt5()
+    if not ok:
+        return jsonify({"status": "CONNECTION_ERROR", "message": msg}), 503
+
+    if not mt5.symbol_info(symbol):
+        return jsonify({"status": "SYMBOL_NOT_FOUND", "message": f"Unknown symbol {symbol}"}), 400
+    mt5.symbol_select(symbol, True)
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return jsonify({"status": "NO_QUOTE", "message": f"No live quote for {symbol}"}), 503
+
+    return jsonify({
+        "currencyPair": symbol,
+        "bid": tick.bid,
+        "ask": tick.ask,
+        "timestamp": _now_iso(),
+    }), 200
+
+
 @app.post("/order")
 @require_token
 def order():

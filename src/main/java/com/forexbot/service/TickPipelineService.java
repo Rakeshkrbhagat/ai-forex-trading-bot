@@ -29,17 +29,20 @@ public class TickPipelineService {
     private final GeminiService geminiService;
     private final MarketStructureFilter marketStructureFilter;
     private final ExecutionService executionService;
+    private final TradeSignalValidator signalValidator;
 
     public TickPipelineService(BotStateManager stateManager,
                                RiskFirewall riskFirewall,
                                GeminiService geminiService,
                                MarketStructureFilter marketStructureFilter,
-                               ExecutionService executionService) {
+                               ExecutionService executionService,
+                               TradeSignalValidator signalValidator) {
         this.stateManager = stateManager;
         this.riskFirewall = riskFirewall;
         this.geminiService = geminiService;
         this.marketStructureFilter = marketStructureFilter;
         this.executionService = executionService;
+        this.signalValidator = signalValidator;
     }
 
     /**
@@ -85,11 +88,21 @@ public class TickPipelineService {
                 filter.reason()
         );
 
-        // 5) Broker dispatch: Gemini signal -> risk firewall (passed) -> MT5 order.
-        com.forexbot.dto.OrderResult execution = executionService.dispatch(decision, 0);
-        log.info("MT5 execution for trade #{} {} {}: accepted={} status={}",
+        // 5) Guardrail validation of the LLM signal + risk-based position sizing.
+        TradeSignalValidator.ValidationResult validation = signalValidator.validate(decision);
+        if (!validation.approved()) {
+            log.warn("Trade #{} {} on {} blocked by guardrails: {}",
+                    tradeNumber, action, tick.currencyPair(), validation.reason());
+            return PipelineResult.completed(hold(tick,
+                    "Guardrail validation blocked trade: " + validation.reason()));
+        }
+
+        // 6) Broker dispatch: Gemini signal -> risk firewall -> guardrails -> MT5 order.
+        com.forexbot.dto.OrderResult execution =
+                executionService.dispatch(decision, validation.volume());
+        log.info("MT5 execution for trade #{} {} {}: accepted={} status={} volume={}",
                 tradeNumber, action, tick.currencyPair(),
-                execution.accepted(), execution.status());
+                execution.accepted(), execution.status(), validation.volume());
 
         return PipelineResult.completed(decision);
     }
