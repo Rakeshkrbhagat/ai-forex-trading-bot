@@ -1,5 +1,6 @@
 package com.forexbot.service;
 
+import com.forexbot.dto.BotConfig;
 import com.google.common.util.concurrent.AtomicDouble;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,55 @@ public class BotStateManager {
     private final AtomicReference<String> accountId = new AtomicReference<>(null);
     private final AtomicReference<Instant> lastUpdated = new AtomicReference<>(Instant.now());
 
+    // --- Risk firewall limits & kill switch (thread-safe) ---
+    private final AtomicInteger maxDailyTrades = new AtomicInteger(Integer.MAX_VALUE);
+    private final AtomicDouble maxDailyLossUsd = new AtomicDouble(Double.MAX_VALUE);
+    private final AtomicBoolean killSwitchEngaged = new AtomicBoolean(false);
+    private final AtomicReference<String> killSwitchReason = new AtomicReference<>(null);
+
+    /**
+     * Applies the risk-management limits from the supplied configuration.
+     */
+    public void applyConfig(BotConfig config) {
+        this.accountId.set(config.accountId());
+        this.maxDailyTrades.set(config.maxDailyTrades());
+        this.maxDailyLossUsd.set(Math.abs(config.maxDailyLossUsd()));
+        touch();
+    }
+
+    public int getMaxDailyTrades() {
+        return maxDailyTrades.get();
+    }
+
+    public double getMaxDailyLossUsd() {
+        return maxDailyLossUsd.get();
+    }
+
+    /**
+     * Engages the emergency kill switch: forces the running flag to false and
+     * records the reason. Idempotent under concurrent invocation.
+     *
+     * @return {@code true} if this call engaged the kill switch, {@code false}
+     * if it was already engaged.
+     */
+    public boolean engageKillSwitch(String reason) {
+        boolean firstTrip = killSwitchEngaged.compareAndSet(false, true);
+        if (firstTrip) {
+            killSwitchReason.set(reason);
+        }
+        running.set(false);
+        touch();
+        return firstTrip;
+    }
+
+    public boolean isKillSwitchEngaged() {
+        return killSwitchEngaged.get();
+    }
+
+    public String getKillSwitchReason() {
+        return killSwitchReason.get();
+    }
+
     /**
      * Starts the bot: sets the running flag to true and resets the daily counters.
      *
@@ -31,6 +81,8 @@ public class BotStateManager {
     public boolean start(String accountId) {
         this.accountId.set(accountId);
         resetDailyCounters();
+        killSwitchEngaged.set(false);
+        killSwitchReason.set(null);
         boolean transitioned = running.compareAndSet(false, true);
         touch();
         return transitioned;

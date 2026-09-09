@@ -1,8 +1,11 @@
 com/forexbot/dto/TradeDecision.class
 com/forexbot/service/BotStateManager.class
+com/forexbot/controller/TradingBotController.class
 com/forexbot/controller/BotConfigController.class
 com/forexbot/dto/TradeDecision$Action.class
 com/forexbot/AiForexTradingBotApplication.class
 com/forexbot/dto/BotConfig.class
 com/forexbot/dto/MarketTickRequest.class
+com/forexbot/service/RiskFirewall.class
+com/forexbot/service/RiskFirewall$RiskCheckResult.class
 com/forexbot/dto/BotStatus.class
