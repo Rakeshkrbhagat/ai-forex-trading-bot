@@ -2,6 +2,7 @@ package com.forexbot.controller;
 
 import com.forexbot.dto.BotConfig;
 import com.forexbot.dto.BotStatus;
+import com.forexbot.service.BotStateManager;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +20,12 @@ import java.time.Instant;
 @RequestMapping("/api/bot")
 public class BotConfigController {
 
+    private final BotStateManager stateManager;
+
+    public BotConfigController(BotStateManager stateManager) {
+        this.stateManager = stateManager;
+    }
+
     @GetMapping("/health")
     public ResponseEntity<String> health() {
         return ResponseEntity.ok("UP");
@@ -26,11 +33,12 @@ public class BotConfigController {
 
     @PostMapping("/config")
     public ResponseEntity<BotStatus> configure(@Valid @RequestBody BotConfig config) {
+        stateManager.applyConfig(config);
         BotStatus status = new BotStatus(
                 config.accountId(),
-                false,
-                0,
-                0.0,
+                stateManager.isRunning(),
+                stateManager.getTradesExecutedToday(),
+                stateManager.getDailyPnlUsd(),
                 Instant.now()
         );
         return ResponseEntity.ok(status);
