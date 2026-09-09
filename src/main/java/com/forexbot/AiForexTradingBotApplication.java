@@ -10,5 +10,3 @@ public class AiForexTradingBotApplication {
         SpringApplication.run(AiForexTradingBotApplication.class, args);
     }
 }
-
-
