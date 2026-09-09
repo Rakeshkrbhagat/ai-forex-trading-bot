@@ -1,6 +1,8 @@
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/AiForexTradingBotApplication.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/controller/BotConfigController.java
+/Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/controller/TradingBotController.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/BotConfig.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/BotStatus.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/MarketTickRequest.java
 /Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/dto/TradeDecision.java
+/Users/rakeshkumarbhagat/Desktop/my proj/ai-forex-trading-bot/src/main/java/com/forexbot/service/BotStateManager.java

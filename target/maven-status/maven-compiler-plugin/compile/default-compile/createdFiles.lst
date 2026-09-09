@@ -1,4 +1,5 @@
 com/forexbot/dto/TradeDecision.class
+com/forexbot/service/BotStateManager.class
 com/forexbot/controller/BotConfigController.class
 com/forexbot/dto/TradeDecision$Action.class
 com/forexbot/AiForexTradingBotApplication.class
