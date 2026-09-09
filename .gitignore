@@ -1,0 +1,15 @@
+# Build output
+target/
+
+# IDE
+.idea/
+*.iml
+
+# Python / Streamlit
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store

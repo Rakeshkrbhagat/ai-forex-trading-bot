@@ -23,12 +23,61 @@ import requests
 import streamlit as st
 
 API_BASE_URL = os.getenv("FOREXBOT_API_URL", "http://localhost:8080/api/bot")
+AUTH_BASE_URL = os.getenv("FOREXBOT_AUTH_URL", "http://localhost:8080/api/auth")
 REQUEST_TIMEOUT = float(os.getenv("FOREXBOT_API_TIMEOUT", "10"))
 
 
 def _url(path: str) -> str:
     """Join the API base with a relative path."""
     return f"{API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _auth_url(path: str) -> str:
+    """Join the auth base with a relative path."""
+    return f"{AUTH_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _auth_headers() -> dict[str, str]:
+    """Bearer-token header for authenticated backend calls."""
+    token = st.session_state.get("auth_token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def login(username: str, password: str) -> tuple[bool, str]:
+    """Authenticate against the backend and store the bearer token."""
+    try:
+        resp = requests.post(
+            _auth_url("login"),
+            json={"username": username, "password": password},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.ok:
+            data = resp.json()
+            st.session_state["auth_token"] = data.get("token")
+            st.session_state["auth_user"] = data.get("username", username)
+            st.session_state["auth_expires"] = data.get("expiresAt")
+            return True, "Login successful"
+        if resp.status_code == 401:
+            return False, "Invalid username or password"
+        return False, f"Login failed (HTTP {resp.status_code})"
+    except requests.RequestException as exc:
+        return False, f"Failed to reach backend: {exc}"
+
+
+def logout() -> None:
+    """Revoke the token on the backend and clear the local session."""
+    token = st.session_state.get("auth_token")
+    if token:
+        try:
+            requests.post(
+                _auth_url("logout"),
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException:
+            pass
+    for key in ("auth_token", "auth_user", "auth_expires", "last_status", "account_id"):
+        st.session_state.pop(key, None)
 
 
 def get_health() -> tuple[bool, str]:
@@ -44,28 +93,34 @@ def get_health() -> tuple[bool, str]:
 
 def post_config(config: dict[str, Any]) -> requests.Response:
     """POST the bot configuration to the backend."""
-    return requests.post(_url("config"), json=config, timeout=REQUEST_TIMEOUT)
+    return requests.post(
+        _url("config"), json=config, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
+    )
 
 
 def post_start(account_id: str | None) -> requests.Response:
     """Trigger the bot start command."""
     params = {"accountId": account_id} if account_id else None
-    return requests.post(_url("start"), params=params, timeout=REQUEST_TIMEOUT)
+    return requests.post(
+        _url("start"), params=params, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
+    )
 
 
 def post_stop() -> requests.Response:
     """Trigger the bot stop command."""
-    return requests.post(_url("stop"), timeout=REQUEST_TIMEOUT)
+    return requests.post(_url("stop"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
 
 
 def get_status() -> requests.Response:
     """Fetch the current bot status snapshot."""
-    return requests.get(_url("status"), timeout=REQUEST_TIMEOUT)
+    return requests.get(_url("status"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
 
 
 def post_tick(tick: dict[str, Any]) -> requests.Response:
     """Send a market tick through the pipeline."""
-    return requests.post(_url("tick"), json=tick, timeout=REQUEST_TIMEOUT)
+    return requests.post(
+        _url("tick"), json=tick, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
+    )
 
 
 def render_status(status: dict[str, Any]) -> None:
@@ -83,6 +138,39 @@ def render_status(status: dict[str, Any]) -> None:
 
 st.set_page_config(page_title="AI Forex Trading Bot", layout="wide")
 st.title("AI Forex Trading Bot - Control Panel")
+
+
+def render_login() -> None:
+    """Render the login gate that guards the dashboard."""
+    st.subheader("Sign in")
+    st.info("Authentication required to access the trading dashboard.")
+    with st.form("login_form"):
+        username = st.text_input("Username", value="", autocomplete="username")
+        password = st.text_input(
+            "Password", value="", type="password", autocomplete="current-password"
+        )
+        submit = st.form_submit_button("Login", use_container_width=True)
+    if submit:
+        ok, message = login(username, password)
+        if ok:
+            st.success(message)
+            st.rerun()
+        else:
+            st.error(message)
+
+
+# --- Authentication gate: nothing below renders until logged in. ---
+if not st.session_state.get("auth_token"):
+    render_login()
+    st.stop()
+
+with st.sidebar:
+    st.caption(f"Signed in as **{st.session_state.get('auth_user', 'user')}**")
+    if st.session_state.get("auth_expires"):
+        st.caption(f"Session expires: {st.session_state['auth_expires']}")
+    if st.button("Log out", use_container_width=True):
+        logout()
+        st.rerun()
 
 healthy, health_msg = get_health()
 if healthy:
