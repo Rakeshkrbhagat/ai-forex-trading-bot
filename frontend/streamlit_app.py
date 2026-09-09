@@ -21,8 +21,24 @@ from typing import Any
 import requests
 import streamlit as st
 
-API_BASE_URL = os.getenv("FOREXBOT_API_URL", "http://localhost:8080/api/bot")
-AUTH_BASE_URL = os.getenv("FOREXBOT_AUTH_URL", "http://localhost:8080/api/auth")
+# Single source of truth for the backend. On Streamlit Cloud set FOREXBOT_BACKEND_URL
+# (or add it to .streamlit/secrets.toml) to your Render URL, e.g.
+#   https://ai-forex-trading-bot.onrender.com
+# The individual FOREXBOT_*_URL vars still override per-service if ever needed.
+def _backend_base() -> str:
+    base = os.getenv("FOREXBOT_BACKEND_URL")
+    if not base:
+        try:  # Streamlit secrets (works on Streamlit Community Cloud)
+            base = st.secrets.get("FOREXBOT_BACKEND_URL")  # type: ignore[assignment]
+        except Exception:
+            base = None
+    return (base or "http://localhost:8080").rstrip("/")
+
+
+BACKEND_BASE_URL = _backend_base()
+
+API_BASE_URL = os.getenv("FOREXBOT_API_URL", f"{BACKEND_BASE_URL}/api/bot")
+AUTH_BASE_URL = os.getenv("FOREXBOT_AUTH_URL", f"{BACKEND_BASE_URL}/api/auth")
 REQUEST_TIMEOUT = float(os.getenv("FOREXBOT_API_TIMEOUT", "10"))
 
 
@@ -109,17 +125,17 @@ def get_status() -> requests.Response:
 
 
 def _mt5_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_MT5_URL", "http://localhost:8080/api/mt5")
+    base = os.getenv("FOREXBOT_MT5_URL", f"{BACKEND_BASE_URL}/api/mt5")
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
 def _risk_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_RISK_URL", "http://localhost:8080/api/risk")
+    base = os.getenv("FOREXBOT_RISK_URL", f"{BACKEND_BASE_URL}/api/risk")
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
 def _monitor_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_MONITOR_URL", "http://localhost:8080/api/monitor")
+    base = os.getenv("FOREXBOT_MONITOR_URL", f"{BACKEND_BASE_URL}/api/monitor")
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 
