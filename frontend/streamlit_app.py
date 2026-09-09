@@ -1,14 +1,12 @@
-"""JTICKET-07 | Streamlit UI Connector & API Integration.
+"""AI Forex Trading Bot - Mobile Monitoring & Guardrail Hub.
 
-Streamlit frontend that communicates with the Java Spring Boot backend
-exposed at http://localhost:8080/api/bot/...
-
-Features:
-  * Sidebar parameter form that POSTs a BotConfig to /api/bot/config.
-  * Start / Stop lifecycle buttons wired to /api/bot/start and /api/bot/stop.
-  * Live status panel backed by /api/bot/status.
-  * Backend health indicator backed by /api/bot/health.
-  * Optional manual market-tick sender wired to /api/bot/tick.
+Mobile-first Streamlit dashboard that pivots away from manual trade execution and
+static technical indicators toward:
+  * Risk guardrail configuration (max risk %, allowed-symbols watchlist, drawdown
+    stop limits) that bound an autonomous LLM trading agent.
+  * A real-time AI activity console streaming the LLM's market analysis, reasoning
+    and BUY / SELL / HOLD decision states.
+  * Live telemetry cards (balance, equity, open P&L) streamed from the backend.
 
 Run with:
     streamlit run frontend/streamlit_app.py
@@ -17,6 +15,7 @@ Run with:
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import requests
@@ -91,15 +90,8 @@ def get_health() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def post_config(config: dict[str, Any]) -> requests.Response:
-    """POST the bot configuration to the backend."""
-    return requests.post(
-        _url("config"), json=config, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
-    )
-
-
 def post_start(account_id: str | None) -> requests.Response:
-    """Trigger the bot start command."""
+    """Engage the autonomous AI trading engine."""
     params = {"accountId": account_id} if account_id else None
     return requests.post(
         _url("start"), params=params, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
@@ -107,20 +99,13 @@ def post_start(account_id: str | None) -> requests.Response:
 
 
 def post_stop() -> requests.Response:
-    """Trigger the bot stop command."""
+    """Halt the autonomous AI trading engine."""
     return requests.post(_url("stop"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
 
 
 def get_status() -> requests.Response:
     """Fetch the current bot status snapshot."""
     return requests.get(_url("status"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
-
-
-def post_tick(tick: dict[str, Any]) -> requests.Response:
-    """Send a market tick through the pipeline."""
-    return requests.post(
-        _url("tick"), json=tick, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
-    )
 
 
 def _mt5_url(path: str) -> str:
@@ -131,6 +116,41 @@ def _mt5_url(path: str) -> str:
 def _risk_url(path: str) -> str:
     base = os.getenv("FOREXBOT_RISK_URL", "http://localhost:8080/api/risk")
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _monitor_url(path: str) -> str:
+    base = os.getenv("FOREXBOT_MONITOR_URL", "http://localhost:8080/api/monitor")
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def get_telemetry() -> dict[str, Any] | None:
+    """Fetch live bridge/account telemetry (balance, equity, connection)."""
+    try:
+        resp = requests.get(_monitor_url("telemetry"), headers=_auth_headers(),
+                            timeout=REQUEST_TIMEOUT)
+        return resp.json() if resp.ok else None
+    except requests.RequestException:
+        return None
+
+
+def get_positions() -> list[dict[str, Any]]:
+    """Fetch open positions (for aggregate open P&L)."""
+    try:
+        resp = requests.get(_monitor_url("positions"), headers=_auth_headers(),
+                            timeout=REQUEST_TIMEOUT)
+        return resp.json() if resp.ok else []
+    except requests.RequestException:
+        return []
+
+
+def get_activity(limit: int = 40) -> list[dict[str, Any]]:
+    """Fetch the LLM activity / decision feed."""
+    try:
+        resp = requests.get(_monitor_url("activity"), params={"limit": limit},
+                            headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
+        return resp.json() if resp.ok else []
+    except requests.RequestException:
+        return []
 
 
 def post_mt5_connect(login: int, password: str, server: str) -> requests.Response:
@@ -149,21 +169,13 @@ def post_guardrails(guardrails: dict[str, Any]) -> requests.Response:
     )
 
 
-def render_status(status: dict[str, Any]) -> None:
-    """Render a BotStatus payload as metrics."""
-    col1, col2, col3 = st.columns(3)
-    running = status.get("running", False)
-    col1.metric("State", "RUNNING" if running else "STOPPED")
-    col2.metric("Trades Today", status.get("tradesExecutedToday", 0))
-    col3.metric("Daily P&L (USD)", f"{status.get('dailyPnlUsd', 0.0):,.2f}")
-    st.caption(
-        f"Account: {status.get('accountId') or 'n/a'}  |  "
-        f"Last updated: {status.get('lastUpdated') or 'n/a'}"
-    )
-
-
-st.set_page_config(page_title="AI Forex Trading Bot", layout="wide")
-st.title("AI Forex Trading Bot - Control Panel")
+st.set_page_config(
+    page_title="AI Forex Trading Bot",
+    page_icon="📈",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+st.title("AI Forex Trading Bot - Monitoring Hub")
 
 
 def render_login() -> None:
@@ -223,6 +235,7 @@ with st.sidebar:
                 if resp.ok:
                     st.success(f"MT5 credentials saved for {mt5_server.strip()}")
                     st.session_state["mt5_connected"] = True
+                    st.session_state["account_id"] = mt5_login.strip()
                 else:
                     st.error(f"Connect failed (HTTP {resp.status_code}): {resp.text}")
             except requests.RequestException as exc:
@@ -279,78 +292,32 @@ with st.sidebar:
         except requests.RequestException as exc:
             st.error(f"Failed to reach backend: {exc}")
 
-with st.sidebar:
-    st.header("Bot Configuration")
-
-    with st.form("config_form"):
-        account_id = st.text_input("Account ID", value="ACC-001")
-        currency_pair = st.selectbox(
-            "Currency Pair",
-            options=["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CHF"],
-            index=0,
-        )
-        max_daily_trades = st.number_input(
-            "Max Daily Trades", min_value=1, max_value=1000, value=10, step=1
-        )
-        max_daily_loss_usd = st.number_input(
-            "Max Daily Loss (USD)", min_value=0.01, value=500.0, step=10.0
-        )
-        risk_per_trade_percent = st.number_input(
-            "Risk Per Trade (%)", min_value=0.01, max_value=100.0, value=1.0, step=0.1
-        )
-        stop_loss_pips = st.number_input(
-            "Stop Loss (pips)", min_value=1, max_value=1000, value=20, step=1
-        )
-
-        submitted = st.form_submit_button("Apply Configuration", use_container_width=True)
-
-    if submitted:
-        payload = {
-            "accountId": account_id,
-            "currencyPair": currency_pair,
-            "maxDailyTrades": int(max_daily_trades),
-            "maxDailyLossUsd": float(max_daily_loss_usd),
-            "riskPerTradePercent": float(risk_per_trade_percent),
-            "stopLossPips": int(stop_loss_pips),
-        }
-        try:
-            resp = post_config(payload)
-            if resp.ok:
-                st.success("Configuration applied")
-                st.session_state["last_status"] = resp.json()
-            else:
-                st.error(f"Config rejected (HTTP {resp.status_code}): {resp.text}")
-        except requests.RequestException as exc:
-            st.error(f"Failed to reach backend: {exc}")
-
-    st.session_state["account_id"] = account_id
-
-st.subheader("Lifecycle Controls")
+st.subheader("Autonomous Engine")
 start_col, stop_col, refresh_col = st.columns(3)
 
-if start_col.button("Start Bot", use_container_width=True):
+if start_col.button("Start AI", use_container_width=True):
     try:
         resp = post_start(st.session_state.get("account_id"))
         if resp.ok:
             st.session_state["last_status"] = resp.json()
-            st.success("Start command sent")
+            st.success("AI engine started")
         else:
             st.error(f"Start failed (HTTP {resp.status_code}): {resp.text}")
     except requests.RequestException as exc:
         st.error(f"Failed to reach backend: {exc}")
 
-if stop_col.button("Stop Bot", use_container_width=True):
+if stop_col.button("Stop AI", use_container_width=True):
     try:
         resp = post_stop()
         if resp.ok:
             st.session_state["last_status"] = resp.json()
-            st.success("Stop command sent")
+            st.success("AI engine stopped")
         else:
             st.error(f"Stop failed (HTTP {resp.status_code}): {resp.text}")
     except requests.RequestException as exc:
         st.error(f"Failed to reach backend: {exc}")
 
-if refresh_col.button("Refresh Status", use_container_width=True):
+if refresh_col.button("Refresh", use_container_width=True):
     try:
         resp = get_status()
         if resp.ok:
@@ -360,41 +327,65 @@ if refresh_col.button("Refresh Status", use_container_width=True):
     except requests.RequestException as exc:
         st.error(f"Failed to reach backend: {exc}")
 
-st.subheader("Bot Status")
-status = st.session_state.get("last_status")
-if status is None:
-    try:
-        resp = get_status()
-        if resp.ok:
-            status = resp.json()
-            st.session_state["last_status"] = status
-    except requests.RequestException:
-        status = None
+st.divider()
+st.subheader("Live Telemetry")
 
-if status:
-    render_status(status)
+telemetry = get_telemetry()
+connected = bool(telemetry.get("connected")) if telemetry else False
+account = (telemetry or {}).get("account") or {}
+positions = get_positions()
+open_pnl = sum(float(p.get("profit", 0.0)) for p in positions)
+
+if connected:
+    st.success("🟢 Bridge Connected")
 else:
-    st.info("No status yet. Apply a configuration or start the bot.")
+    st.error("🔴 Bridge Disconnected")
 
-with st.expander("Send a Market Tick (manual test)"):
-    with st.form("tick_form"):
-        tick_pair = st.text_input("Currency Pair", value="EUR/USD", key="tick_pair")
-        bid = st.number_input("Bid", min_value=0.0001, value=1.0850, step=0.0001, format="%.5f")
-        ask = st.number_input("Ask", min_value=0.0001, value=1.0852, step=0.0001, format="%.5f")
-        tick_submit = st.form_submit_button("Send Tick")
+t1, t2, t3 = st.columns(3)
+t1.metric("Balance", f"{float(account.get('balance', 0.0)):,.2f}")
+t2.metric("Equity", f"{float(account.get('equity', 0.0)):,.2f}")
+t3.metric("Open P&L", f"{open_pnl:,.2f}")
 
-    if tick_submit:
-        tick_payload = {"currencyPair": tick_pair, "bid": float(bid), "ask": float(ask)}
-        try:
-            resp = post_tick(tick_payload)
-            if resp.status_code == 423:
-                st.warning("Tick blocked by risk firewall")
-                st.json(resp.json())
-            elif resp.ok:
-                st.success("Tick processed")
-                st.json(resp.json())
-            else:
-                st.error(f"Tick failed (HTTP {resp.status_code}): {resp.text}")
-        except requests.RequestException as exc:
-            st.error(f"Failed to reach backend: {exc}")
+if positions:
+    st.markdown("**Open Positions**")
+    st.dataframe(
+        [
+            {
+                "Symbol": p.get("symbol"),
+                "Type": p.get("type"),
+                "Volume": p.get("volume"),
+                "Open": p.get("priceOpen"),
+                "Current": p.get("priceCurrent"),
+                "P&L": p.get("profit"),
+            }
+            for p in positions
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+st.divider()
+st.subheader("AI Activity Console")
+st.caption("Live stream of the LLM's market analysis, reasoning and BUY / SELL / HOLD decisions.")
+
+_DECISION_ICON = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪", "REJECTED": "⛔"}
+
+activity = get_activity(limit=40)
+if activity:
+    lines = []
+    for entry in activity:
+        ts = (entry.get("timestamp") or "")[:19].replace("T", " ")
+        action = str(entry.get("action", "")).upper()
+        icon = _DECISION_ICON.get(action, "•")
+        lines.append(
+            f"{icon} [{ts}] {entry.get('symbol', '')} {action}: {entry.get('message', '')}"
+        )
+    st.code("\n".join(lines), language="text")
+else:
+    st.info("Waiting for the AI engine to stream market analysis...")
+
+auto_refresh = st.checkbox("Auto-refresh console (5s)", value=False)
+if auto_refresh:
+    time.sleep(5)
+    st.rerun()
 

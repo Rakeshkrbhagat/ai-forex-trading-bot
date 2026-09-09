@@ -1,6 +1,7 @@
 package com.forexbot.service;
 
 import com.forexbot.config.ExecutionProperties;
+import com.forexbot.dto.MarketDataWindow;
 import com.forexbot.dto.MarketTickRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,28 @@ public class MarketDataService {
             return Optional.ofNullable(tick);
         } catch (Exception ex) {
             log.warn("Failed to fetch market data for {}: {}", symbol, ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Fetches a recent OHLC candle window for a symbol to build the LLM context.
+     */
+    public Optional<MarketDataWindow> fetchCandles(String symbol, String timeframe, int nBars) {
+        try {
+            MarketDataWindow window = bridgeClient.get()
+                    .uri(uriBuilder -> uriBuilder.path("/candles")
+                            .queryParam("symbol", symbol)
+                            .queryParam("timeframe", timeframe)
+                            .queryParam("nBars", nBars)
+                            .build())
+                    .retrieve()
+                    .bodyToMono(MarketDataWindow.class)
+                    .timeout(Duration.ofSeconds(Math.max(5, properties.getTimeoutSeconds())))
+                    .block();
+            return Optional.ofNullable(window);
+        } catch (Exception ex) {
+            log.warn("Failed to fetch candles for {}: {}", symbol, ex.getMessage());
             return Optional.empty();
         }
     }

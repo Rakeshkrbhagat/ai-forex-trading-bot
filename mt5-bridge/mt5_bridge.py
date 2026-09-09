@@ -29,8 +29,12 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+import random
+import threading
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -40,6 +44,11 @@ try:  # MetaTrader5 only installs on Windows terminals.
     import MetaTrader5 as mt5
 except Exception:  # pragma: no cover - allows import on non-Windows dev boxes.
     mt5 = None
+
+try:  # websockets powers the cloud-to-local execution pipeline.
+    import websockets
+except Exception:  # pragma: no cover - optional at import time.
+    websockets = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +67,11 @@ MT5_LOGIN = os.getenv("MT5_LOGIN")
 MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
 MT5_PATH = os.getenv("MT5_TERMINAL_PATH")
+
+# Cloud backend WebSocket endpoint the bridge connects out to (behind NAT).
+BACKEND_WS_URL = os.getenv("BACKEND_WS_URL", "")
+BRIDGE_ID = os.getenv("BRIDGE_ID", "local-mt5-bridge")
+TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "15"))
 
 # Map string timeframes from the backend to MT5 constants (resolved lazily).
 _TIMEFRAME_NAMES = {
@@ -142,6 +156,48 @@ def _pip_size(symbol_info) -> float:
     if symbol_info.digits in (3, 5):
         return point * 10
     return point
+
+
+def _retcode_reason(retcode) -> str:
+    """Map an MT5 order retcode to a human-readable reason for the dashboard."""
+    if mt5 is None:
+        return "unknown"
+    reasons = {
+        mt5.TRADE_RETCODE_DONE: "Order completed",
+        mt5.TRADE_RETCODE_REQUOTE: "Requote",
+        mt5.TRADE_RETCODE_REJECT: "Request rejected",
+        mt5.TRADE_RETCODE_CANCEL: "Request canceled",
+        mt5.TRADE_RETCODE_INVALID: "Invalid request",
+        mt5.TRADE_RETCODE_INVALID_VOLUME: "Invalid volume/lot size",
+        mt5.TRADE_RETCODE_INVALID_PRICE: "Invalid price",
+        mt5.TRADE_RETCODE_INVALID_STOPS: "Invalid stops (SL/TP)",
+        mt5.TRADE_RETCODE_NO_MONEY: "Insufficient funds",
+        mt5.TRADE_RETCODE_MARKET_CLOSED: "Market closed",
+        mt5.TRADE_RETCODE_TRADE_DISABLED: "Trading disabled",
+        mt5.TRADE_RETCODE_PRICE_CHANGED: "Price changed",
+        mt5.TRADE_RETCODE_PRICE_OFF: "No quotes to process request",
+        mt5.TRADE_RETCODE_CONNECTION: "No connection to trade server",
+        mt5.TRADE_RETCODE_TIMEOUT: "Request timed out",
+    }
+    return reasons.get(retcode, f"Broker retcode {retcode}")
+
+
+def account_snapshot() -> dict:
+    """Return live account balance/equity/margin levels for telemetry."""
+    if mt5 is None:
+        return {}
+    info = mt5.account_info()
+    if info is None:
+        return {}
+    return {
+        "login": info.login,
+        "balance": info.balance,
+        "equity": info.equity,
+        "margin": info.margin,
+        "freeMargin": info.margin_free,
+        "marginLevel": info.margin_level,
+        "server": info.server,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +314,12 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
 
     log.info("Sending %s %s %.2f lots @ %.5f (SL=%s TP=%s)",
              side, symbol, volume, price, request_payload["sl"], request_payload["tp"])
-    result = mt5.order_send(request_payload)
+    try:
+        result = mt5.order_send(request_payload)
+    except Exception as exc:  # terminal crash / IPC failure
+        log.exception("order_send raised an exception for %s %s", side, symbol)
+        return ({"accepted": False, "status": "EXECUTION_EXCEPTION",
+                 "message": f"order_send exception: {exc}", "timestamp": _now_iso()}, 500)
 
     if result is None:
         code, err = mt5.last_error()
@@ -268,16 +329,19 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
 
     accepted = result.retcode == mt5.TRADE_RETCODE_DONE
     slippage_pips = abs(result.price - price) / pip if pip else 0.0
+    reason = _retcode_reason(result.retcode)
 
     response = {
         "accepted": accepted,
         "status": "FILLED" if accepted else "REJECTED",
         "brokerRetcode": result.retcode,
+        "brokerReason": reason,
         "orderTicket": getattr(result, "order", None),
         "executedPrice": result.price,
         "executedVolume": result.volume,
         "slippagePips": round(slippage_pips, 2),
         "message": result.comment,
+        "account": account_snapshot(),
         "timestamp": _now_iso(),
     }
 
@@ -285,9 +349,166 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
         log.info("FILLED ticket=%s price=%.5f slippage=%.2f pips",
                  response["orderTicket"], result.price, slippage_pips)
     else:
-        log.warning("REJECTED retcode=%s comment=%s", result.retcode, result.comment)
+        # Specific handling for common broker rejections (requote / closed market).
+        log.warning("REJECTED retcode=%s (%s) comment=%s",
+                    result.retcode, reason, result.comment)
 
     return response, (200 if accepted else 422)
+
+
+# --------------------------------------------------------------------------- #
+# 4. Cloud-to-Local WebSocket Execution Pipeline
+# --------------------------------------------------------------------------- #
+# The bridge runs behind NAT, so it dials *out* to the cloud backend, receives
+# risk-validated trade commands, dispatches them to MT5, and streams execution
+# receipts + account telemetry back. The loop is fully self-healing: any network
+# disruption triggers an exponential-backoff reconnect instead of crashing.
+
+_RECONNECT_BASE_DELAY = 2       # seconds
+_RECONNECT_MAX_DELAY = 60       # seconds
+
+
+def _build_receipt(command: dict, response: dict, status: int) -> dict:
+    """Wrap an execution response into a telemetry receipt for the dashboard."""
+    return {
+        "type": "EXECUTION_RECEIPT",
+        "bridgeId": BRIDGE_ID,
+        "commandId": command.get("commandId") or command.get("id"),
+        "httpStatus": status,
+        "result": response,
+        "orderTicket": response.get("orderTicket"),
+        "account": response.get("account") or account_snapshot(),
+        "timestamp": _now_iso(),
+    }
+
+
+def _build_telemetry() -> dict:
+    """Periodic account/margin snapshot pushed to the cloud dashboard."""
+    return {
+        "type": "TELEMETRY",
+        "bridgeId": BRIDGE_ID,
+        "account": account_snapshot(),
+        "connected": mt5 is not None and mt5.terminal_info() is not None,
+        "timestamp": _now_iso(),
+    }
+
+
+async def _safe_send(ws, payload: dict) -> None:
+    """Send a JSON payload, swallowing transient send failures."""
+    try:
+        await ws.send(json.dumps(payload))
+    except Exception as exc:  # pragma: no cover - network dependent
+        log.warning("Failed to send payload to backend: %s", exc)
+
+
+async def _handle_command(ws, raw_message: str) -> None:
+    """Parse an incoming command, dispatch to MT5, and emit a receipt."""
+    try:
+        command = json.loads(raw_message)
+    except (TypeError, ValueError) as exc:
+        log.error("Discarding malformed command payload: %s", exc)
+        await _safe_send(ws, {
+            "type": "EXECUTION_RECEIPT",
+            "bridgeId": BRIDGE_ID,
+            "httpStatus": 400,
+            "result": {"accepted": False, "status": "INVALID_JSON",
+                       "message": f"Malformed command: {exc}"},
+            "timestamp": _now_iso(),
+        })
+        return
+
+    msg_type = (command.get("type") or "ORDER").upper()
+
+    # Allow the backend to poll telemetry / keep-alive on demand.
+    if msg_type in ("PING", "TELEMETRY_REQUEST"):
+        await _safe_send(ws, _build_telemetry())
+        return
+
+    # Normalize the backend 'side' field into the shared signal schema.
+    if "action" not in command and "side" in command:
+        command["action"] = command.get("side")
+
+    try:
+        response, status = execute_ai_trade(command)
+    except Exception as exc:  # never let a single bad command kill the worker
+        log.exception("Unhandled error while executing command")
+        response, status = ({"accepted": False, "status": "EXECUTION_EXCEPTION",
+                             "message": str(exc), "timestamp": _now_iso()}, 500)
+
+    await _safe_send(ws, _build_receipt(command, response, status))
+
+
+async def _telemetry_pump(ws) -> None:
+    """Continuously stream account/margin telemetry back to the cloud."""
+    while True:
+        await asyncio.sleep(TELEMETRY_INTERVAL)
+        await _safe_send(ws, _build_telemetry())
+
+
+async def _run_ws_session(url: str) -> None:
+    """Open a single WebSocket session and service commands until it drops."""
+    headers = [("Authorization", f"Bearer {API_KEY}")] if API_KEY else []
+    async with websockets.connect(url, extra_headers=headers,
+                                  ping_interval=20, ping_timeout=20) as ws:
+        log.info("Connected to backend WebSocket %s", url)
+        # Announce presence so the backend can route commands to this bridge.
+        await _safe_send(ws, {
+            "type": "HELLO",
+            "bridgeId": BRIDGE_ID,
+            "account": account_snapshot(),
+            "timestamp": _now_iso(),
+        })
+
+        telemetry_task = asyncio.ensure_future(_telemetry_pump(ws))
+        try:
+            async for raw_message in ws:
+                await _handle_command(ws, raw_message)
+        finally:
+            telemetry_task.cancel()
+
+
+async def _ws_client_loop() -> None:
+    """Auto-reconnecting client loop with exponential backoff resilience."""
+    delay = _RECONNECT_BASE_DELAY
+    while True:
+        try:
+            await _run_ws_session(BACKEND_WS_URL)
+            # Clean disconnect -> reset backoff before reconnecting.
+            delay = _RECONNECT_BASE_DELAY
+            log.info("WebSocket session closed; reconnecting in %ss", delay)
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            raise
+        except Exception as exc:  # network drop, handshake failure, etc.
+            log.warning("WebSocket session ended (%s); reconnecting in %ss",
+                        exc, delay)
+
+        # Jittered exponential backoff to avoid thundering-herd reconnects.
+        await asyncio.sleep(delay + random.uniform(0, 1))
+        delay = min(delay * 2, _RECONNECT_MAX_DELAY)
+
+
+def start_ws_bridge() -> None:
+    """Spin up the WebSocket execution pipeline on a background thread."""
+    if not BACKEND_WS_URL:
+        log.info("BACKEND_WS_URL not set; WebSocket execution pipeline disabled")
+        return
+    if websockets is None:
+        log.error("websockets package not installed; cannot start execution pipeline")
+        return
+
+    def _runner():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_ws_client_loop())
+        except Exception:  # pragma: no cover - last-resort guard
+            log.exception("WebSocket client loop terminated unexpectedly")
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=_runner, name="mt5-ws-bridge", daemon=True)
+    thread.start()
+    log.info("WebSocket execution pipeline started -> %s", BACKEND_WS_URL)
 
 
 # --------------------------------------------------------------------------- #
@@ -375,5 +596,7 @@ def order():
 
 if __name__ == "__main__":
     log.info("Starting MT5 bridge on %s:%s", HOST, PORT)
+    # Launch the cloud-to-local execution pipeline alongside the REST server.
+    start_ws_bridge()
     app.run(host=HOST, port=PORT)
 

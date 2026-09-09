@@ -1,6 +1,7 @@
 package com.forexbot.service;
 
 import com.forexbot.config.GeminiProperties;
+import com.forexbot.dto.MarketDataWindow;
 import com.forexbot.dto.MarketTickRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,10 +28,13 @@ public class GeminiService {
 
     private final WebClient geminiWebClient;
     private final GeminiProperties properties;
+    private final MarketContextBuilder contextBuilder;
 
-    public GeminiService(WebClient geminiWebClient, GeminiProperties properties) {
+    public GeminiService(WebClient geminiWebClient, GeminiProperties properties,
+                         MarketContextBuilder contextBuilder) {
         this.geminiWebClient = geminiWebClient;
         this.properties = properties;
+        this.contextBuilder = contextBuilder;
     }
 
     /**
@@ -73,6 +77,68 @@ public class GeminiService {
             log.error("Failed to call Gemini API", e);
             throw new GeminiClientException("Failed to call Gemini API", e);
         }
+    }
+
+    /**
+     * Analyzes a live OHLC candle window (price-action context) and returns the
+     * raw JSON trade decision (symbol/action/volume/sl/tp/confidence) from the
+     * model acting as an autonomous trading agent.
+     */
+    public String analyzeMarketData(MarketDataWindow window) {
+        if (!properties.hasApiKey()) {
+            throw new IllegalStateException(
+                    "GEMINI_API_KEY is not configured; cannot call Gemini API");
+        }
+
+        String prompt = buildTradeDecisionPrompt(window);
+        Map<String, Object> requestBody = buildRequestBody(prompt);
+        String path = "/v1beta/models/" + properties.getModel() + ":generateContent";
+
+        try {
+            Map<String, Object> response = geminiWebClient.post()
+                    .uri(path)
+                    .header("x-goog-api-key", properties.getApiKey())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                    .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                    .block();
+            return extractText(response);
+        } catch (WebClientResponseException e) {
+            log.error("Gemini API returned {} for trade-decision analysis", e.getStatusCode(), e);
+            throw new GeminiClientException("Gemini API error: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            log.error("Failed to call Gemini API", e);
+            throw new GeminiClientException("Failed to call Gemini API", e);
+        }
+    }
+
+    /**
+     * Builds a strict-JSON prompt from a candle window instructing the model to
+     * act as an autonomous trading agent and return a type-safe decision.
+     */
+    String buildTradeDecisionPrompt(MarketDataWindow window) {
+        return """
+                You are an autonomous forex trading agent and risk-aware strategist.
+                Analyze the recent price action and respond with STRICT JSON only,
+                no markdown, no commentary. Use this exact schema:
+                {
+                  "symbol": string,
+                  "action": "BUY" | "SELL" | "HOLD",
+                  "volume": number,            // order size in lots, e.g. 0.10
+                  "sl": number,                // stop-loss price
+                  "tp": number,                // take-profit price
+                  "confidenceScore": number    // 0.0 - 1.0
+                }
+                Rules:
+                - Only signal BUY or SELL on a clear, high-conviction setup; otherwise HOLD.
+                - For HOLD, set volume, sl and tp to 0.
+                - confidenceScore reflects conviction from 0.0 (none) to 1.0 (certain).
+
+                Market data context:
+                %s
+                """.formatted(contextBuilder.buildPromptPayload(window));
     }
 
     /**

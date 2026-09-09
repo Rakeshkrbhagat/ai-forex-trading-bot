@@ -1,4 +1,6 @@
 flask>=3.0.0
+# Cloud-to-local execution pipeline (WebSocket client to the backend).
+websockets>=12.0
 # MetaTrader5 is Windows-only; install on the machine running the MT5 terminal.
 MetaTrader5>=5.0.45 ; platform_system == "Windows"
 
