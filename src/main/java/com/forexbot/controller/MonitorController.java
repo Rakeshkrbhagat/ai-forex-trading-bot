@@ -28,7 +28,13 @@ public class MonitorController {
     @GetMapping("/telemetry")
     public Map<String, Object> telemetry() {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("connected", bridgeHandler.hasConnectedBridge());
+        // "connected" reflects a LIVE MT5 terminal/account session (what the
+        // dashboard cares about), not merely the relay socket being open.
+        boolean bridgeOnline = bridgeHandler.hasConnectedBridge();
+        boolean mt5Connected = bridgeHandler.isMt5Connected();
+        body.put("connected", bridgeOnline && mt5Connected);
+        body.put("bridgeOnline", bridgeOnline);
+        body.put("mt5Connected", mt5Connected);
         body.put("account", bridgeHandler.getLastAccount());
         return body;
     }

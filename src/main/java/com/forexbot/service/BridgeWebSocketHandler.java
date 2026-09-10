@@ -38,6 +38,9 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     /** Latest open positions streamed by the bridge, if any. */
     private final AtomicReference<List<Map<String, Object>>> lastPositions = new AtomicReference<>(List.of());
 
+    /** Whether the bridge reports a live MT5 terminal/account session. */
+    private final AtomicReference<Boolean> mt5Connected = new AtomicReference<>(false);
+
     private final ExecutionProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -86,6 +89,11 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
         if (positions instanceof List<?> positionList) {
             lastPositions.set((List<Map<String, Object>>) positionList);
         }
+        // The bridge reports MT5 terminal/account readiness via a 'connected' flag.
+        Object connectedFlag = parsed.get("connected");
+        if (connectedFlag instanceof Boolean b) {
+            mt5Connected.set(b);
+        }
 
         switch (type) {
             case "HELLO" -> log.info("Bridge registered: bridgeId={} payload={}", bridgeId, payload);
@@ -102,6 +110,7 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
             // No bridge online: reset telemetry so the dashboard reflects reality.
             lastAccount.set(Map.of());
             lastPositions.set(List.of());
+            mt5Connected.set(false);
         }
         log.info("MT5 bridge WebSocket closed: id={} status={}", session.getId(), status);
     }
@@ -109,6 +118,11 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     /** @return the latest account snapshot (balance/equity/margin), never null. */
     public Map<String, Object> getLastAccount() {
         return lastAccount.get();
+    }
+
+    /** @return whether the bridge reports a live MT5 terminal/account session. */
+    public boolean isMt5Connected() {
+        return Boolean.TRUE.equals(mt5Connected.get());
     }
 
     /** @return the latest open positions streamed by the bridge, never null. */

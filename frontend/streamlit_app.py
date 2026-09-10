@@ -347,15 +347,22 @@ st.divider()
 st.subheader("Live Telemetry")
 
 telemetry = get_telemetry()
-connected = bool(telemetry.get("connected")) if telemetry else False
-account = (telemetry or {}).get("account") or {}
+telemetry = telemetry or {}
+bridge_online = bool(telemetry.get("bridgeOnline"))
+mt5_connected = bool(telemetry.get("mt5Connected"))
+account = telemetry.get("account") or {}
 positions = get_positions()
 open_pnl = sum(float(p.get("profit", 0.0)) for p in positions)
 
-if connected:
-    st.success("🟢 Bridge Connected")
+# The relay (mt5_bridge.py) can be online while the MT5 terminal/account is not
+# yet logged in — surface both so the status is unambiguous.
+if bridge_online and mt5_connected:
+    st.success("🟢 Bridge Connected · MT5 account live")
+elif bridge_online:
+    st.warning("🟡 Bridge relay online · MT5 account NOT connected "
+               "(enter broker credentials / start MT5 terminal)")
 else:
-    st.error("🔴 Bridge Disconnected")
+    st.error("🔴 Bridge Disconnected (mt5_bridge.py is not connected)")
 
 t1, t2, t3 = st.columns(3)
 t1.metric("Balance", f"{float(account.get('balance', 0.0)):,.2f}")
