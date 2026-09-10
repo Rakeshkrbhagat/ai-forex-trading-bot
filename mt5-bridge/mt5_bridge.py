@@ -78,7 +78,7 @@ MT5_PATH = os.getenv("MT5_TERMINAL_PATH")
 # Cloud backend the bridge connects out to (behind NAT). Point this at your live
 # Render deployment; override with the BACKEND_URL env var / .env if needed.
 BACKEND_URL = os.getenv(
-    "BACKEND_URL", "https://ai-forex-trading-bot-gogi.onrender.com"
+    "BACKEND_URL", "https://ai-forex-trading-bot-qogi.onrender.com"
 ).rstrip("/")
 
 
