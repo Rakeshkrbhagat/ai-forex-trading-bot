@@ -1,5 +1,6 @@
 package com.forexbot.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.forexbot.config.ExecutionProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,8 +11,10 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * WebSocket endpoint the local MT5 bridge dials out to (it lives behind NAT).
@@ -29,10 +32,18 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     /** bridgeId -> live session. Last writer wins if a bridge reconnects. */
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
-    private final ExecutionProperties properties;
+    /** Latest account snapshot streamed by the bridge (balance, equity, ...). */
+    private final AtomicReference<Map<String, Object>> lastAccount = new AtomicReference<>(Map.of());
 
-    public BridgeWebSocketHandler(ExecutionProperties properties) {
+    /** Latest open positions streamed by the bridge, if any. */
+    private final AtomicReference<List<Map<String, Object>>> lastPositions = new AtomicReference<>(List.of());
+
+    private final ExecutionProperties properties;
+    private final ObjectMapper objectMapper;
+
+    public BridgeWebSocketHandler(ExecutionProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -44,10 +55,21 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
         String payload = message.getPayload();
-        String type = extractField(payload, "type");
-        String bridgeId = extractField(payload, "bridgeId");
+
+        Map<String, Object> parsed;
+        try {
+            parsed = objectMapper.readValue(payload, Map.class);
+        } catch (Exception ex) {
+            log.warn("Ignoring non-JSON bridge message: {}", ex.getMessage());
+            return;
+        }
+
+        String type = String.valueOf(parsed.getOrDefault("type", "")).toUpperCase();
+        Object bridgeIdObj = parsed.get("bridgeId");
+        String bridgeId = bridgeIdObj == null ? null : String.valueOf(bridgeIdObj);
 
         if (bridgeId != null && !bridgeId.isBlank()) {
             // Re-index under the stable bridgeId and drop the provisional key.
@@ -55,7 +77,17 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
             sessions.put(bridgeId, session);
         }
 
-        switch (type == null ? "" : type.toUpperCase()) {
+        // Capture any account/position snapshot regardless of frame type.
+        Object account = parsed.get("account");
+        if (account instanceof Map<?, ?> accountMap) {
+            lastAccount.set((Map<String, Object>) accountMap);
+        }
+        Object positions = parsed.get("positions");
+        if (positions instanceof List<?> positionList) {
+            lastPositions.set((List<Map<String, Object>>) positionList);
+        }
+
+        switch (type) {
             case "HELLO" -> log.info("Bridge registered: bridgeId={} payload={}", bridgeId, payload);
             case "TELEMETRY" -> log.debug("Bridge telemetry [{}]: {}", bridgeId, payload);
             case "EXECUTION_RECEIPT" -> log.info("Execution receipt [{}]: {}", bridgeId, payload);
@@ -66,7 +98,22 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessions.values().removeIf(s -> s.getId().equals(session.getId()));
+        if (sessions.isEmpty()) {
+            // No bridge online: reset telemetry so the dashboard reflects reality.
+            lastAccount.set(Map.of());
+            lastPositions.set(List.of());
+        }
         log.info("MT5 bridge WebSocket closed: id={} status={}", session.getId(), status);
+    }
+
+    /** @return the latest account snapshot (balance/equity/margin), never null. */
+    public Map<String, Object> getLastAccount() {
+        return lastAccount.get();
+    }
+
+    /** @return the latest open positions streamed by the bridge, never null. */
+    public List<Map<String, Object>> getLastPositions() {
+        return lastPositions.get();
     }
 
     /**
@@ -110,32 +157,6 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
             return true;
         }
         return expected.equals(bearerToken);
-    }
-
-    /** Minimal, dependency-free extraction of a top-level string JSON field. */
-    private static String extractField(String json, String field) {
-        if (json == null) {
-            return null;
-        }
-        String needle = "\"" + field + "\"";
-        int keyIdx = json.indexOf(needle);
-        if (keyIdx < 0) {
-            return null;
-        }
-        int colon = json.indexOf(':', keyIdx + needle.length());
-        if (colon < 0) {
-            return null;
-        }
-        int i = colon + 1;
-        while (i < json.length() && Character.isWhitespace(json.charAt(i))) {
-            i++;
-        }
-        if (i >= json.length() || json.charAt(i) != '"') {
-            return null; // non-string value; not needed for our routing fields.
-        }
-        int start = i + 1;
-        int end = json.indexOf('"', start);
-        return end < 0 ? null : json.substring(start, end);
     }
 }
 
