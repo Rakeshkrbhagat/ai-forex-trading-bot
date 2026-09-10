@@ -40,6 +40,13 @@ from functools import wraps
 
 from flask import Flask, jsonify, request
 
+try:  # Optional: load configuration from a local .env file if present.
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:  # pragma: no cover - python-dotenv is optional.
+    pass
+
 try:  # MetaTrader5 only installs on Windows terminals.
     import MetaTrader5 as mt5
 except Exception:  # pragma: no cover - allows import on non-Windows dev boxes.
@@ -68,8 +75,27 @@ MT5_PASSWORD = os.getenv("MT5_PASSWORD")
 MT5_SERVER = os.getenv("MT5_SERVER")
 MT5_PATH = os.getenv("MT5_TERMINAL_PATH")
 
-# Cloud backend WebSocket endpoint the bridge connects out to (behind NAT).
-BACKEND_WS_URL = os.getenv("BACKEND_WS_URL", "")
+# Cloud backend the bridge connects out to (behind NAT). Point this at your live
+# Render deployment; override with the BACKEND_URL env var / .env if needed.
+BACKEND_URL = os.getenv(
+    "BACKEND_URL", "https://ai-forex-trading-bot-gogi.onrender.com"
+).rstrip("/")
+
+
+def _derive_ws_url(http_url: str) -> str:
+    """Turn an http(s) backend base into the wss:// bridge WebSocket endpoint."""
+    if not http_url:
+        return ""
+    ws_base = http_url
+    if ws_base.startswith("https://"):
+        ws_base = "wss://" + ws_base[len("https://"):]
+    elif ws_base.startswith("http://"):
+        ws_base = "ws://" + ws_base[len("http://"):]
+    return f"{ws_base.rstrip('/')}/ws/bridge"
+
+
+# Explicit BACKEND_WS_URL wins; otherwise derive it from BACKEND_URL.
+BACKEND_WS_URL = os.getenv("BACKEND_WS_URL", "") or _derive_ws_url(BACKEND_URL)
 BRIDGE_ID = os.getenv("BRIDGE_ID", "local-mt5-bridge")
 TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "15"))
 
