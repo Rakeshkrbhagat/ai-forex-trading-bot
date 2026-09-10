@@ -2,7 +2,10 @@ package com.forexbot;
 
 import com.forexbot.dto.BotConfig;
 import com.forexbot.dto.BotStatus;
+import com.forexbot.dto.LoginRequest;
+import com.forexbot.dto.LoginResponse;
 import com.forexbot.dto.MarketTickRequest;
+import com.forexbot.dto.RiskGuardrails;
 import com.forexbot.dto.TradeDecision;
 import com.forexbot.service.BotStateManager;
 import com.forexbot.service.GeminiService;
@@ -13,6 +16,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -78,6 +82,35 @@ class StressAndConcurrencyIntegrationTest {
     void stubGemini() {
         when(geminiService.analyzeMarketStructure(any(MarketTickRequest.class)))
                 .thenReturn(TRENDING_BUY_JSON);
+        authenticate();
+    }
+
+    /**
+     * Logs in with the default dev credentials and attaches the issued bearer
+     * token to every subsequent request, since {@code /api/bot/**} is guarded by
+     * the {@code AuthInterceptor}.
+     */
+    private void authenticate() {
+        LoginResponse login = rest.postForEntity(
+                "http://localhost:" + port + "/api/auth/login",
+                new LoginRequest("admin", "changeme"), LoginResponse.class).getBody();
+        assertThat(login).isNotNull();
+        String bearer = "Bearer " + login.token();
+        rest.getRestTemplate().getInterceptors().removeIf(i -> i instanceof AuthHeaderInterceptor);
+        rest.getRestTemplate().getInterceptors().add(new AuthHeaderInterceptor(bearer));
+    }
+
+    /** Attaches the bearer token to outbound test requests. */
+    private record AuthHeaderInterceptor(String bearer)
+            implements org.springframework.http.client.ClientHttpRequestInterceptor {
+        @Override
+        public org.springframework.http.client.ClientHttpResponse intercept(
+                org.springframework.http.HttpRequest request, byte[] body,
+                org.springframework.http.client.ClientHttpRequestExecution execution)
+                throws java.io.IOException {
+            request.getHeaders().set(HttpHeaders.AUTHORIZATION, bearer);
+            return execution.execute(request, body);
+        }
     }
 
     private String url(String path) {
@@ -89,6 +122,14 @@ class StressAndConcurrencyIntegrationTest {
                 "ACC-E2E", "EUR/USD", maxTrades, maxLoss, 1.0, 20);
         ResponseEntity<BotStatus> resp = rest.postForEntity(url("/config"), config, BotStatus.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // Guardrails must permit the traded symbol; keep the drawdown limit equal
+        // to the configured max loss so the firewall + guardrails stay consistent.
+        RiskGuardrails guardrails = new RiskGuardrails(
+                1.0, List.of("EUR/USD"), maxLoss, 20, 40, 100_000.0, false);
+        ResponseEntity<RiskGuardrails> g = rest.postForEntity(
+                "http://localhost:" + port + "/api/risk/guardrails", guardrails, RiskGuardrails.class);
+        assertThat(g.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     private void start() {

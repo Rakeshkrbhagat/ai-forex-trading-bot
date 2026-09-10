@@ -1,9 +1,10 @@
 package com.forexbot.service;
 
-import com.forexbot.dto.MarketTickRequest;
+import com.forexbot.dto.MarketDataWindow;
 import com.forexbot.dto.RiskGuardrails;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +25,12 @@ public class AutonomousTradingAgent {
     private final RiskGuardrailStore guardrailStore;
     private final MarketDataService marketDataService;
     private final TickPipelineService pipeline;
+
+    /** Timeframe + depth of the candle window fed to the LLM each cycle. */
+    @Value("${agent.timeframe:M15}")
+    private String timeframe;
+    @Value("${agent.candles:100}")
+    private int candles;
 
     public AutonomousTradingAgent(BotStateManager stateManager,
                                   RiskGuardrailStore guardrailStore,
@@ -47,20 +54,20 @@ public class AutonomousTradingAgent {
         }
 
         for (String symbol : guardrails.allowedSymbols()) {
-            marketDataService.fetchTick(symbol).ifPresentOrElse(
+            marketDataService.fetchCandles(symbol, timeframe, candles).ifPresentOrElse(
                     this::evaluate,
-                    () -> log.debug("No market data for {}", symbol));
+                    () -> log.debug("No candle window for {}", symbol));
         }
     }
 
-    private void evaluate(MarketTickRequest tick) {
+    private void evaluate(MarketDataWindow window) {
         try {
-            TickPipelineService.PipelineResult result = pipeline.process(tick);
+            TickPipelineService.PipelineResult result = pipeline.processWindow(window);
             log.info("Autonomous cycle {} -> {} ({})",
-                    tick.currencyPair(), result.decision().action(), result.decision().rationale());
+                    window.symbol(), result.decision().action(), result.decision().rationale());
         } catch (Exception ex) {
             log.error("Autonomous evaluation failed for {}: {}",
-                    tick.currencyPair(), ex.getMessage());
+                    window.symbol(), ex.getMessage());
         }
     }
 }

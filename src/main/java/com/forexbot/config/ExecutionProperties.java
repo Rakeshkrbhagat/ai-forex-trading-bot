@@ -37,6 +37,17 @@ public class ExecutionProperties {
     /** Request timeout in seconds for a single dispatch. */
     private int timeoutSeconds = 15;
 
+    /**
+     * Transport used to reach the MT5 bridge:
+     * <ul>
+     *   <li>{@code auto} - use the WebSocket tunnel when a bridge is connected,
+     *       otherwise fall back to outbound REST (best for cloud + local dev).</li>
+     *   <li>{@code ws} - always multiplex over the bridge WebSocket.</li>
+     *   <li>{@code rest} - always use outbound REST to {@link #bridgeUrl}.</li>
+     * </ul>
+     */
+    private String transport = "auto";
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -107,6 +118,14 @@ public class ExecutionProperties {
 
     public void setTimeoutSeconds(int timeoutSeconds) {
         this.timeoutSeconds = timeoutSeconds;
+    }
+
+    public String getTransport() {
+        return transport;
+    }
+
+    public void setTransport(String transport) {
+        this.transport = transport;
     }
 }
 

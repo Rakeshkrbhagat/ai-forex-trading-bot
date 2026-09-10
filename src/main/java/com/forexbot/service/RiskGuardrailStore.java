@@ -19,8 +19,19 @@ public class RiskGuardrailStore {
     private final AtomicReference<RiskGuardrails> current =
             new AtomicReference<>(RiskGuardrails.defaults());
 
+    private final BotStateManager stateManager;
+
+    public RiskGuardrailStore(BotStateManager stateManager) {
+        this.stateManager = stateManager;
+        // Seed the firewall with the default guardrail drawdown at startup.
+        stateManager.setMaxDailyLossUsd(current.get().maxDrawdownUsd());
+    }
+
     public void save(RiskGuardrails guardrails) {
         current.set(guardrails);
+        // Keep the hardcoded risk firewall consistent with the user's live
+        // guardrail: the drawdown limit doubles as the daily-loss kill switch.
+        stateManager.setMaxDailyLossUsd(guardrails.maxDrawdownUsd());
         log.info("Risk guardrails updated: maxRisk={}% symbols={} maxDrawdown={} autonomous={}",
                 guardrails.maxRiskPercent(), guardrails.allowedSymbols(),
                 guardrails.maxDrawdownUsd(), guardrails.autonomousEnabled());

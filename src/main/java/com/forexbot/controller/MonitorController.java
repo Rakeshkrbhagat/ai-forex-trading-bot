@@ -1,5 +1,6 @@
 package com.forexbot.controller;
 
+import com.forexbot.service.ActivityFeedService;
 import com.forexbot.service.BridgeWebSocketHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,9 +20,11 @@ import java.util.Map;
 public class MonitorController {
 
     private final BridgeWebSocketHandler bridgeHandler;
+    private final ActivityFeedService activityFeed;
 
-    public MonitorController(BridgeWebSocketHandler bridgeHandler) {
+    public MonitorController(BridgeWebSocketHandler bridgeHandler, ActivityFeedService activityFeed) {
         this.bridgeHandler = bridgeHandler;
+        this.activityFeed = activityFeed;
     }
 
     /** Bridge connection state + latest account snapshot (balance/equity/margin). */
@@ -45,10 +48,10 @@ public class MonitorController {
         return bridgeHandler.getLastPositions();
     }
 
-    /** AI activity / decision feed (placeholder until wired to the agent). */
+    /** AI activity / decision feed streamed from the autonomous pipeline. */
     @GetMapping("/activity")
     public List<Map<String, Object>> activity(@RequestParam(defaultValue = "40") int limit) {
-        return List.of();
+        return activityFeed.recent(limit);
     }
 }
 

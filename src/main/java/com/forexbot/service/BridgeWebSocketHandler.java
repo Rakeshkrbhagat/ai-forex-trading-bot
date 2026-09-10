@@ -11,9 +11,13 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -40,6 +44,9 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
 
     /** Whether the bridge reports a live MT5 terminal/account session. */
     private final AtomicReference<Boolean> mt5Connected = new AtomicReference<>(false);
+
+    /** requestId -> future awaiting the bridge's correlated response. */
+    private final Map<String, CompletableFuture<Map<String, Object>>> pending = new ConcurrentHashMap<>();
 
     private final ExecutionProperties properties;
     private final ObjectMapper objectMapper;
@@ -93,6 +100,15 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
         Object connectedFlag = parsed.get("connected");
         if (connectedFlag instanceof Boolean b) {
             mt5Connected.set(b);
+        }
+
+        // Resolve any pending request/response correlation (quotes, candles, orders).
+        Object requestIdObj = parsed.get("requestId");
+        if (requestIdObj != null) {
+            CompletableFuture<Map<String, Object>> future = pending.remove(String.valueOf(requestIdObj));
+            if (future != null) {
+                future.complete(parsed);
+            }
         }
 
         switch (type) {
@@ -159,6 +175,47 @@ public class BridgeWebSocketHandler extends TextWebSocketHandler {
     /** @return {@code true} if at least one bridge session is currently open. */
     public boolean hasConnectedBridge() {
         return sessions.values().stream().anyMatch(WebSocketSession::isOpen);
+    }
+
+    /**
+     * Send a typed request down the bridge WebSocket and block for its correlated
+     * response. This is the cloud-safe transport: the bridge lives behind NAT and
+     * cannot be reached via outbound REST from the Render container, so quotes,
+     * candles and orders are multiplexed over the socket the bridge dialed out on.
+     *
+     * @param type      request type the bridge understands (e.g. {@code QUOTE_REQUEST}).
+     * @param payload   request fields (may be {@code null}).
+     * @param timeoutMs how long to wait for the correlated response.
+     * @return the response map, or {@code null} on timeout / no bridge / error.
+     */
+    public Map<String, Object> request(String type, Map<String, Object> payload, long timeoutMs) {
+        if (!hasConnectedBridge()) {
+            log.warn("No bridge connected; cannot service {} request", type);
+            return null;
+        }
+        String requestId = UUID.randomUUID().toString();
+        Map<String, Object> message = new LinkedHashMap<>();
+        if (payload != null) {
+            message.putAll(payload);
+        }
+        message.put("type", type);
+        message.put("requestId", requestId);
+
+        CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+        pending.put(requestId, future);
+        try {
+            String json = objectMapper.writeValueAsString(message);
+            if (!sendCommand(null, json)) {
+                pending.remove(requestId);
+                return null;
+            }
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (Exception ex) {
+            log.warn("Bridge {} request timed out/failed: {}", type, ex.getMessage());
+            return null;
+        } finally {
+            pending.remove(requestId);
+        }
     }
 
     /**

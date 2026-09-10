@@ -14,6 +14,7 @@ import org.springframework.web.reactive.function.client.WebClientRequestExceptio
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -29,10 +30,16 @@ public class ExecutionService {
     private final ExecutionProperties properties;
     private final WebClient bridgeClient;
     private final Mt5CredentialStore credentialStore;
+    private final BridgeWebSocketHandler bridgeHandler;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
-    public ExecutionService(ExecutionProperties properties, Mt5CredentialStore credentialStore) {
+    public ExecutionService(ExecutionProperties properties, Mt5CredentialStore credentialStore,
+                            BridgeWebSocketHandler bridgeHandler,
+                            com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         this.properties = properties;
         this.credentialStore = credentialStore;
+        this.bridgeHandler = bridgeHandler;
+        this.objectMapper = objectMapper;
         WebClient.Builder builder = WebClient.builder()
                 .baseUrl(properties.getBridgeUrl())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
@@ -82,6 +89,10 @@ public class ExecutionService {
         log.info("Dispatching {} {} {} lots to MT5 bridge (SL={} pips)",
                 order.side(), order.symbol(), order.volume(), order.stopLossPips());
 
+        if (useWebSocket()) {
+            return dispatchOverWs(order);
+        }
+
         try {
             OrderResult result = bridgeClient.post()
                     .uri("/order")
@@ -128,6 +139,53 @@ public class ExecutionService {
             log.error("Unexpected execution error for {} {}: {}",
                     order.side(), order.symbol(), ex.getMessage(), ex);
             return OrderResult.rejected("EXECUTION_ERROR", ex.getMessage());
+        }
+    }
+
+    /** @return true when orders should be multiplexed over the bridge WebSocket. */
+    private boolean useWebSocket() {
+        String t = properties.getTransport();
+        if ("ws".equalsIgnoreCase(t)) {
+            return true;
+        }
+        if ("rest".equalsIgnoreCase(t)) {
+            return false;
+        }
+        return bridgeHandler.hasConnectedBridge();
+    }
+
+    /**
+     * Dispatch an order down the bridge WebSocket and await the correlated
+     * execution receipt. Used in cloud deployments where the bridge is behind
+     * NAT and cannot be reached over outbound REST.
+     */
+    @SuppressWarnings("unchecked")
+    private OrderResult dispatchOverWs(OrderRequest order) {
+        Map<String, Object> payload = objectMapper.convertValue(order, Map.class);
+        Map<String, Object> resp = bridgeHandler.request("ORDER", payload,
+                properties.getTimeoutSeconds() * 1000L);
+        if (resp == null) {
+            return OrderResult.rejected("CONNECTION_ERROR",
+                    "No bridge response (WebSocket timeout or no bridge connected)");
+        }
+        // The bridge wraps the order outcome in a "result" object on receipts.
+        Object result = resp.getOrDefault("result", resp);
+        try {
+            OrderResult mapped = objectMapper.convertValue(result, OrderResult.class);
+            if (mapped == null) {
+                return OrderResult.rejected("EMPTY_RESPONSE", "Bridge returned no result body");
+            }
+            if (mapped.accepted()) {
+                log.info("Order FILLED (ws): ticket={} price={} retcode={}",
+                        mapped.orderTicket(), mapped.executedPrice(), mapped.brokerRetcode());
+            } else {
+                log.warn("Order REJECTED (ws): status={} retcode={} msg={}",
+                        mapped.status(), mapped.brokerRetcode(), mapped.message());
+            }
+            return mapped;
+        } catch (Exception ex) {
+            log.error("Failed to parse WS execution receipt: {}", ex.getMessage());
+            return OrderResult.rejected("BAD_RESPONSE", "Unparseable bridge receipt: " + ex.getMessage());
         }
     }
 }

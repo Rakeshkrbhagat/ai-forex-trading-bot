@@ -48,6 +48,22 @@ public class BotStateManager {
     }
 
     /**
+     * Overrides the max daily loss limit (USD) used by the risk firewall's kill
+     * switch. Lets the user's live guardrail drawdown drive the hard stop so the
+     * hardcoded firewall and user guardrails stay consistent end-to-end.
+     */
+    public void setMaxDailyLossUsd(double maxDailyLossUsd) {
+        this.maxDailyLossUsd.set(Math.abs(maxDailyLossUsd));
+        touch();
+    }
+
+    /** Overrides the max daily trade cap used by the risk firewall. */
+    public void setMaxDailyTrades(int maxDailyTrades) {
+        this.maxDailyTrades.set(maxDailyTrades);
+        touch();
+    }
+
+    /**
      * Engages the emergency kill switch: forces the running flag to false and
      * records the reason. Idempotent under concurrent invocation.
      *

@@ -226,6 +226,30 @@ def account_snapshot() -> dict:
     }
 
 
+def positions_snapshot() -> list:
+    """Return live open positions so the dashboard can show open P&L."""
+    if mt5 is None:
+        return []
+    positions = mt5.positions_get()
+    if not positions:
+        return []
+    out = []
+    for p in positions:
+        out.append({
+            "ticket": getattr(p, "ticket", None),
+            "symbol": getattr(p, "symbol", None),
+            "type": "BUY" if getattr(p, "type", 0) == 0 else "SELL",
+            "volume": getattr(p, "volume", None),
+            "priceOpen": getattr(p, "price_open", None),
+            "priceCurrent": getattr(p, "price_current", None),
+            "stopLoss": getattr(p, "sl", None),
+            "takeProfit": getattr(p, "tp", None),
+            "profit": getattr(p, "profit", None),
+            "time": getattr(p, "time", None),
+        })
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # 2. Live Market Data Retrieval
 # --------------------------------------------------------------------------- #
@@ -400,6 +424,7 @@ def _build_receipt(command: dict, response: dict, status: int) -> dict:
         "type": "EXECUTION_RECEIPT",
         "bridgeId": BRIDGE_ID,
         "commandId": command.get("commandId") or command.get("id"),
+        "requestId": command.get("requestId"),
         "httpStatus": status,
         "result": response,
         "orderTicket": response.get("orderTicket"),
@@ -414,9 +439,31 @@ def _build_telemetry() -> dict:
         "type": "TELEMETRY",
         "bridgeId": BRIDGE_ID,
         "account": account_snapshot(),
+        "positions": positions_snapshot(),
         "connected": mt5 is not None and mt5.terminal_info() is not None,
         "timestamp": _now_iso(),
     }
+
+
+def _quote_payload(symbol: str) -> tuple[dict, int]:
+    """Build a live tick payload for a symbol (shared by REST + WS transport)."""
+    if not symbol:
+        return {"status": "INVALID_REQUEST", "message": "symbol is required"}, 400
+    ok, msg = ensure_mt5()
+    if not ok:
+        return {"status": "CONNECTION_ERROR", "message": msg}, 503
+    if not mt5.symbol_info(symbol):
+        return {"status": "SYMBOL_NOT_FOUND", "message": f"Unknown symbol {symbol}"}, 400
+    mt5.symbol_select(symbol, True)
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return {"status": "NO_QUOTE", "message": f"No live quote for {symbol}"}, 503
+    return {
+        "currencyPair": symbol,
+        "bid": tick.bid,
+        "ask": tick.ask,
+        "timestamp": _now_iso(),
+    }, 200
 
 
 async def _safe_send(ws, payload: dict) -> None:
@@ -444,10 +491,47 @@ async def _handle_command(ws, raw_message: str) -> None:
         return
 
     msg_type = (command.get("type") or "ORDER").upper()
+    request_id = command.get("requestId")
 
     # Allow the backend to poll telemetry / keep-alive on demand.
     if msg_type in ("PING", "TELEMETRY_REQUEST"):
         await _safe_send(ws, _build_telemetry())
+        return
+
+    # Market-data pull over the WebSocket tunnel (cloud cannot reach the bridge
+    # via REST because it is behind NAT). Reply with a correlated response.
+    if msg_type == "QUOTE_REQUEST":
+        symbol = command.get("symbol")
+        data, status = _quote_payload(symbol)
+        await _safe_send(ws, {
+            "type": "QUOTE_RESPONSE",
+            "bridgeId": BRIDGE_ID,
+            "requestId": request_id,
+            "httpStatus": status,
+            "data": data,
+            "timestamp": _now_iso(),
+        })
+        return
+
+    if msg_type == "CANDLES_REQUEST":
+        symbol = command.get("symbol")
+        timeframe = command.get("timeframe", "M15")
+        n_bars = int(command.get("nBars") or 100)
+        ok, msg = ensure_mt5()
+        candles = get_market_data(symbol, timeframe, n_bars) if ok else []
+        await _safe_send(ws, {
+            "type": "CANDLES_RESPONSE",
+            "bridgeId": BRIDGE_ID,
+            "requestId": request_id,
+            "httpStatus": 200 if ok else 503,
+            "data": {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "count": len(candles),
+                "candles": candles,
+            },
+            "timestamp": _now_iso(),
+        })
         return
 
     # Dashboard "Connect / Save Credentials" -> initialize the MT5 terminal
