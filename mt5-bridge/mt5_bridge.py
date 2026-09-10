@@ -450,6 +450,27 @@ async def _handle_command(ws, raw_message: str) -> None:
         await _safe_send(ws, _build_telemetry())
         return
 
+    # Dashboard "Connect / Save Credentials" -> initialize the MT5 terminal
+    # session with the supplied broker login so telemetry starts flowing.
+    if msg_type == "CONNECT":
+        ok, detail = initialize_mt5(
+            login=command.get("login"),
+            password=command.get("password"),
+            server=command.get("server"),
+        )
+        await _safe_send(ws, {
+            "type": "EXECUTION_RECEIPT",
+            "bridgeId": BRIDGE_ID,
+            "httpStatus": 200 if ok else 502,
+            "result": {"accepted": ok, "status": "MT5_CONNECTED" if ok else "MT5_CONNECT_FAILED",
+                       "message": detail},
+            "account": account_snapshot(),
+            "timestamp": _now_iso(),
+        })
+        # Immediately push fresh telemetry so the dashboard flips to green.
+        await _safe_send(ws, _build_telemetry())
+        return
+
     # Normalize the backend 'side' field into the shared signal schema.
     if "action" not in command and "side" in command:
         command["action"] = command.get("side")
