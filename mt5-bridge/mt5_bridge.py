@@ -474,10 +474,10 @@ async def _telemetry_pump(ws) -> None:
 async def _run_ws_session(url: str) -> None:
     """Open a single WebSocket session and service commands until it drops."""
     headers = [("Authorization", f"Bearer {API_KEY}")] if API_KEY else []
-    async with websockets.connect(url, extra_headers=headers,
+    # Updated from extra_headers to additional_headers for modern websockets library compatibility
+    async with websockets.connect(url, additional_headers=headers,
                                   ping_interval=20, ping_timeout=20) as ws:
         log.info("Connected to backend WebSocket %s", url)
-        # Announce presence so the backend can route commands to this bridge.
         await _safe_send(ws, {
             "type": "HELLO",
             "bridgeId": BRIDGE_ID,
