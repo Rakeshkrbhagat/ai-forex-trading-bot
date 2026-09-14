@@ -13,6 +13,12 @@ public class AuthProperties {
     private String username = "admin";
     private String password = "changeme";
     private long tokenTtlMinutes = 60;
+    /**
+     * Secret used to sign stateless bearer tokens. When blank, a stable secret is
+     * derived from the credentials so tokens survive backend restarts (important
+     * on free-tier hosts that recycle instances).
+     */
+    private String tokenSecret = "";
 
     public String getUsername() {
         return username;
@@ -36,6 +42,14 @@ public class AuthProperties {
 
     public void setTokenTtlMinutes(long tokenTtlMinutes) {
         this.tokenTtlMinutes = tokenTtlMinutes;
+    }
+
+    public String getTokenSecret() {
+        return tokenSecret;
+    }
+
+    public void setTokenSecret(String tokenSecret) {
+        this.tokenSecret = tokenSecret;
     }
 }
 

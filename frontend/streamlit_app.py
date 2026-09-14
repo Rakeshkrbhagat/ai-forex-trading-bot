@@ -420,6 +420,35 @@ def post_mt5_connect(login: int, password: str, server: str) -> requests.Respons
     )
 
 
+def get_mt5_status() -> dict[str, Any] | None:
+    """Fetch server-side MT5 credential/bridge status (survives UI refresh)."""
+    try:
+        resp = _request_with_retry(
+            "GET", f"{BACKEND_BASE_URL}/api/mt5/status", headers=_auth_headers()
+        )
+    except requests.RequestException:
+        return None
+    if resp.ok:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            return None
+    return None
+
+
+def _restore_mt5_state() -> None:
+    """Re-hydrate MT5 connection state from the backend so a browser refresh
+    does not make the account look disconnected (credentials live server-side)."""
+    status = get_mt5_status()
+    if not status:
+        return
+    if status.get("configured"):
+        st.session_state["mt5_connected"] = True
+        if status.get("login") is not None:
+            st.session_state["account_id"] = str(status.get("login"))
+
+
 def post_guardrails(payload: dict[str, Any]) -> requests.Response:
     return _request_with_retry(
         "POST",
@@ -511,6 +540,11 @@ if not st.session_state.get("auth_token"):
 
 # Keep query params synchronized once authenticated.
 _persist_auth_to_query_params()
+
+# Re-hydrate MT5 connection state from the backend (survives browser refresh).
+if not st.session_state.get("_mt5_state_restored"):
+    _restore_mt5_state()
+    st.session_state["_mt5_state_restored"] = True
 
 healthy, health_msg = get_health()
 _status_cls = "ok" if healthy else "bad"
