@@ -416,6 +416,8 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
 
 _RECONNECT_BASE_DELAY = 2       # seconds
 _RECONNECT_MAX_DELAY = 60       # seconds
+# Handshake timeout — generous so a cold-starting Render instance can wake up.
+WS_OPEN_TIMEOUT = int(os.getenv("WS_OPEN_TIMEOUT", "45"))
 
 
 def _build_receipt(command: dict, response: dict, status: int) -> dict:
@@ -576,12 +578,41 @@ async def _telemetry_pump(ws) -> None:
         await _safe_send(ws, _build_telemetry())
 
 
+def _warm_up_backend() -> None:
+    """Wake a sleeping free-tier backend over HTTP so the WS handshake succeeds.
+
+    Render (and similar PaaS) spin instances down when idle; the first WebSocket
+    upgrade then times out while the app boots ("timed out during opening
+    handshake"). A cheap GET on /api/bot/health forces the wake-up so the
+    subsequent handshake completes quickly.
+    """
+    if not BACKEND_URL:
+        return
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{BACKEND_URL}/api/bot/health", method="GET")
+        with urllib.request.urlopen(req, timeout=WS_OPEN_TIMEOUT) as resp:
+            log.info("Backend warm-up %s -> HTTP %s", BACKEND_URL, resp.status)
+    except Exception as exc:  # never block the connect loop on warm-up failure
+        log.warning("Backend warm-up failed (%s); attempting WS connect anyway", exc)
+
+
 async def _run_ws_session(url: str) -> None:
     """Open a single WebSocket session and service commands until it drops."""
     headers = [("Authorization", f"Bearer {API_KEY}")] if API_KEY else []
-    # Updated from extra_headers to additional_headers for modern websockets library compatibility
-    async with websockets.connect(url, additional_headers=headers,
-                                  ping_interval=20, ping_timeout=20) as ws:
+    # open_timeout is generous because free-tier PaaS (Render) can take 30-50s to
+    # wake a sleeping instance; the default 10s caused "timed out during opening
+    # handshake". additional_headers is the modern websockets kwarg (>=11).
+    async with websockets.connect(
+        url,
+        additional_headers=headers,
+        open_timeout=WS_OPEN_TIMEOUT,
+        close_timeout=10,
+        ping_interval=20,
+        ping_timeout=20,
+        max_queue=32,
+    ) as ws:
         log.info("Connected to backend WebSocket %s", url)
         await _safe_send(ws, {
             "type": "HELLO",
@@ -603,6 +634,7 @@ async def _ws_client_loop() -> None:
     delay = _RECONNECT_BASE_DELAY
     while True:
         try:
+            _warm_up_backend()
             await _run_ws_session(BACKEND_WS_URL)
             # Clean disconnect -> reset backoff before reconnecting.
             delay = _RECONNECT_BASE_DELAY
