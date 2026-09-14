@@ -2,6 +2,7 @@ package com.forexbot.controller;
 
 import com.forexbot.service.ActivityFeedService;
 import com.forexbot.service.BridgeWebSocketHandler;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -52,6 +53,15 @@ public class MonitorController {
     @GetMapping("/activity")
     public List<Map<String, Object>> activity(@RequestParam(defaultValue = "40") int limit) {
         return activityFeed.recent(limit);
+    }
+
+    /** Clears the AI activity / decision feed (dashboard "delete" action). */
+    @DeleteMapping("/activity")
+    public Map<String, Object> clearActivity() {
+        activityFeed.clear();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "cleared");
+        return body;
     }
 }
 

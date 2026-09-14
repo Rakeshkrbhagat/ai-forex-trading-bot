@@ -71,7 +71,13 @@ public class TickPipelineService {
         }
 
         // 2) LLM market-structure evaluation (provider chosen at runtime).
-        String rawAnalysis = llmRouter.analyzeMarketStructure(tick);
+        String rawAnalysis;
+        try {
+            rawAnalysis = llmRouter.analyzeMarketStructure(tick);
+        } catch (LlmRouterService.RateLimitedException ex) {
+            activityFeed.record(tick.currencyPair(), "HOLD", "AI paused: " + ex.getMessage());
+            return PipelineResult.completed(hold(tick, "AI paused: " + ex.getMessage()));
+        }
         MarketAnalysis analysis = marketStructureFilter.parse(rawAnalysis);
 
         // 3) Binary TRENDING/SIDEWAYS filter.

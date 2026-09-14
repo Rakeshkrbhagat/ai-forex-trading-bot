@@ -45,6 +45,11 @@ public class ActivityFeedService {
         }
     }
 
+    /** Removes all recorded activity entries. */
+    public synchronized void clear() {
+        entries.clear();
+    }
+
     /** @return up to {@code limit} most-recent entries, newest first. */
     public synchronized List<Map<String, Object>> recent(int limit) {
         int cap = Math.max(1, limit);

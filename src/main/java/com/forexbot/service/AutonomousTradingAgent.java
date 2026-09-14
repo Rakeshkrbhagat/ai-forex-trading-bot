@@ -60,6 +60,16 @@ public class AutonomousTradingAgent {
         return (tf != null && !tf.isBlank()) ? tf : timeframe;
     }
 
+    /**
+     * One-trade-at-a-time gate. When any position is already open we must not
+     * evaluate the market or call the LLM — no new trade and no API call until
+     * the open trade is closed.
+     */
+    private boolean hasOpenTrade() {
+        var positions = bridgeHandler.getLastPositions();
+        return positions != null && !positions.isEmpty();
+    }
+
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
             initialDelayString = "${agent.initial-delay-ms:10000}")
     public void tickCycle() {
@@ -68,6 +78,13 @@ public class AutonomousTradingAgent {
             return;
         }
         if (guardrails.allowedSymbols() == null || guardrails.allowedSymbols().isEmpty()) {
+            return;
+        }
+
+        // One trade at a time: don't evaluate or call the LLM while a position
+        // is still open — wait until it closes.
+        if (hasOpenTrade()) {
+            log.debug("Open trade in progress; skipping cycle (one-trade-at-a-time).");
             return;
         }
 
@@ -93,6 +110,15 @@ public class AutonomousTradingAgent {
 
         if (guardrails.allowedSymbols() == null || guardrails.allowedSymbols().isEmpty()) {
             String msg = "No allowed symbols configured — set them in Risk Guardrails.";
+            activityFeed.record("-", "HOLD", msg);
+            summary.add(msg);
+            return summary;
+        }
+
+        // One trade at a time: if a position is open, do not call the LLM.
+        if (hasOpenTrade()) {
+            String msg = "Open trade in progress — waiting for it to close before the next trade "
+                    + "(one-trade-at-a-time). No AI call made.";
             activityFeed.record("-", "HOLD", msg);
             summary.add(msg);
             return summary;

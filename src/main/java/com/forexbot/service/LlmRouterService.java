@@ -34,8 +34,20 @@ public class LlmRouterService {
     @Value("${ai.rate-limit-cooldown-seconds:60}")
     private long cooldownSeconds;
 
+    /**
+     * Minimum spacing between ANY two outgoing LLM calls (milliseconds). This
+     * caps the request rate no matter how many symbols/cycles run, keeping the
+     * bot comfortably under free-tier limits. Default is 60s = one call/minute.
+     * Extra calls within the window are skipped (treated as HOLD) rather sent.
+     */
+    @Value("${ai.min-request-interval-ms:60000}")
+    private long minRequestIntervalMs;
+
     /** Epoch millis until which LLM calls are short-circuited. */
     private final AtomicLong cooldownUntil = new AtomicLong(0);
+
+    /** Epoch millis of the last dispatched LLM call (for rate throttling). */
+    private final AtomicLong lastRequestAt = new AtomicLong(0);
 
     public LlmRouterService(List<LlmTransport> transports,
                             PromptFactory promptFactory,
@@ -64,6 +76,20 @@ public class LlmRouterService {
             throw new RateLimitedException(
                     "Provider '" + provider + "' is rate-limited (429); cooling down for ~"
                     + remaining + "s.");
+        }
+
+        // Global rate throttle: skip this cycle if we called too recently.
+        long last = lastRequestAt.get();
+        if (minRequestIntervalMs > 0 && (now - last) < minRequestIntervalMs) {
+            long wait = (minRequestIntervalMs - (now - last)) / 1000 + 1;
+            throw new RateLimitedException(
+                    "AI call throttled (min " + (minRequestIntervalMs / 1000)
+                    + "s between calls); skipping ~" + wait + "s to protect the quota.");
+        }
+        // Claim this slot atomically so concurrent symbols don't all fire at once.
+        if (minRequestIntervalMs > 0 && !lastRequestAt.compareAndSet(last, now)) {
+            throw new RateLimitedException(
+                    "AI call throttled (another symbol used this cycle's slot); skipping.");
         }
 
         LlmTransport transport = resolveTransport();

@@ -636,6 +636,20 @@ def get_activity(limit: int = 40) -> list[dict[str, Any]]:
     return []
 
 
+def clear_activity() -> bool:
+    """Delete the AI activity / decision feed on the backend."""
+    try:
+        resp = _request_with_retry(
+            "DELETE",
+            f"{BACKEND_BASE_URL}/api/monitor/activity",
+            headers=_auth_headers(),
+            retries=0,
+        )
+    except requests.RequestException:
+        return False
+    return resp.ok
+
+
 # Restore token before rendering auth gate.
 _restore_auth_from_query_params()
 
@@ -985,8 +999,18 @@ if positions:
     )
 
 st.divider()
-st.subheader("AI Activity Console")
-st.caption("Live stream of the LLM's market analysis, reasoning and BUY / SELL / HOLD decisions.")
+_console_hdr, _console_del = st.columns([0.85, 0.15])
+with _console_hdr:
+    st.subheader("AI Activity Console")
+    st.caption("Live stream of the LLM's market analysis, reasoning and BUY / SELL / HOLD decisions.")
+with _console_del:
+    st.write("")
+    if st.button("🗑 Clear", use_container_width=True, help="Delete all activity / decision logs"):
+        if clear_activity():
+            st.success("Activity log cleared")
+            st.rerun()
+        else:
+            st.error("Failed to clear activity log")
 
 _DECISION_ICON = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪", "REJECTED": "⛔"}
 
