@@ -13,6 +13,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Service wrapper that securely communicates with the Google Gemini REST API.
@@ -33,6 +35,9 @@ public class GeminiService {
     /** Auto-resolved model name (set when the configured one 404s). */
     private final java.util.concurrent.atomic.AtomicReference<String> resolvedModel =
             new java.util.concurrent.atomic.AtomicReference<>();
+
+    private static final Pattern MODEL_SUGGESTION_PATTERN =
+            Pattern.compile("models/([a-zA-Z0-9._-]+)");
 
     public GeminiService(WebClient geminiWebClient, GeminiProperties properties,
                          MarketContextBuilder contextBuilder) {
@@ -87,6 +92,19 @@ public class GeminiService {
             if (e.getStatusCode().value() == 404) {
                 log.warn("Model '{}' not found for {} (404). Attempting auto-resolution...",
                         model, context);
+
+                String suggested = extractSuggestedModelFromError(body);
+                if (suggested != null && !suggested.equals(model)) {
+                    log.info("Retrying {} with provider-suggested model '{}'", context, suggested);
+                    resolvedModel.set(suggested);
+                    try {
+                        return callGenerate(suggested, requestBody);
+                    } catch (WebClientResponseException e2) {
+                        log.warn("Provider-suggested model '{}' failed for {}: {}",
+                                suggested, context, e2.getStatusCode());
+                    }
+                }
+
                 String working = resolveWorkingModel();
                 if (working != null && !working.equals(model)) {
                     log.info("Retrying {} with auto-resolved model '{}'", context, working);
@@ -284,6 +302,20 @@ public class GeminiService {
         Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
         List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
         return String.valueOf(parts.get(0).get("text"));
+    }
+
+    private String extractSuggestedModelFromError(String errorBody) {
+        if (errorBody == null || errorBody.isBlank()) {
+            return null;
+        }
+        Matcher matcher = MODEL_SUGGESTION_PATTERN.matcher(errorBody);
+        while (matcher.find()) {
+            String suggested = matcher.group(1);
+            if (suggested != null && !suggested.isBlank()) {
+                return suggested;
+            }
+        }
+        return null;
     }
 
     /** Raised when the Gemini API cannot be reached or returns an error. */
