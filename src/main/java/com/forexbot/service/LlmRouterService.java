@@ -56,12 +56,14 @@ public class LlmRouterService {
     }
 
     private String run(String prompt, String context) {
+        String provider = aiSettings.get() != null ? aiSettings.get().provider() : "gemini";
         long now = System.currentTimeMillis();
         long until = cooldownUntil.get();
         if (now < until) {
             long remaining = (until - now) / 1000 + 1;
             throw new RateLimitedException(
-                    "AI provider is rate-limited (429); cooling down for ~" + remaining + "s.");
+                    "Provider '" + provider + "' is rate-limited (429); cooling down for ~"
+                    + remaining + "s.");
         }
 
         LlmTransport transport = resolveTransport();
@@ -75,8 +77,9 @@ public class LlmRouterService {
                 log.warn("Provider '{}' returned 429; entering {}s cooldown.",
                         transport.providerId(), cooldownSeconds);
                 throw new RateLimitedException(
-                        "AI provider quota exceeded (429). Cooling down for " + cooldownSeconds
-                        + "s. Reduce poll frequency, switch model/provider, or upgrade your plan.", ex);
+                        "Provider '" + provider + "' quota exceeded (429). Cooling down for "
+                        + cooldownSeconds + "s. Reduce poll frequency, switch model/provider, "
+                        + "or upgrade your plan.", ex);
             }
             throw ex;
         }

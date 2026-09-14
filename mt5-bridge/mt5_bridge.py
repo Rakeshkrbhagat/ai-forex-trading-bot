@@ -124,15 +124,44 @@ def _resolve_timeframe(timeframe: str):
 # --------------------------------------------------------------------------- #
 # 1. Connection Initialization Module
 # --------------------------------------------------------------------------- #
+def _already_connected(login=None) -> bool:
+    """True when the terminal is initialized AND logged into an account.
+
+    When a specific ``login`` is requested we also verify it matches the active
+    account so a credential switch still forces a re-initialize.
+    """
+    if mt5 is None:
+        return False
+    try:
+        if mt5.terminal_info() is None:
+            return False
+        info = mt5.account_info()
+        if info is None:
+            return False
+        if login and int(login) != int(getattr(info, "login", 0)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def initialize_mt5(login=None, password=None, server=None) -> tuple[bool, str]:
     """Dynamically initialize the MT5 terminal connection.
 
     Credentials may be supplied per-request (sent by the backend via the
     execution payload); otherwise environment defaults / the attached terminal
     session are used. Robust error logging uses ``mt5.last_error()``.
+
+    Idempotent: if the terminal is already connected to the desired account we
+    return immediately instead of re-initializing (which previously produced
+    repeated ``MT5 initialized (login=None ...)`` log spam on every call).
     """
     if mt5 is None:
         return False, "MetaTrader5 package not available on this host"
+
+    # Reuse the live session when possible.
+    if _already_connected(login):
+        return True, "MT5 already connected"
 
     kwargs = {}
     if MT5_PATH:
@@ -148,7 +177,15 @@ def initialize_mt5(login=None, password=None, server=None) -> tuple[bool, str]:
         log.error("MT5 initialize failed (%s): %s", code, msg)
         return False, f"MT5 initialize failed ({code}): {msg}"
 
-    log.info("MT5 initialized (login=%s server=%s)", login or MT5_LOGIN, server or MT5_SERVER)
+    resolved_login = login or MT5_LOGIN
+    resolved_server = server or MT5_SERVER
+    # Fall back to the attached terminal's account info for cleaner logs.
+    if not resolved_login:
+        acct = mt5.account_info()
+        if acct is not None:
+            resolved_login = getattr(acct, "login", None)
+            resolved_server = getattr(acct, "server", resolved_server)
+    log.info("MT5 initialized (login=%s server=%s)", resolved_login, resolved_server)
     return True, "MT5 connected"
 
 
