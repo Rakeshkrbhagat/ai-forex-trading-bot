@@ -19,10 +19,13 @@ public class AiDecisionEngine {
 
     private final GeminiService geminiService;
     private final SignalSchemaValidator schemaValidator;
+    private final ActivityFeedService activityFeed;
 
-    public AiDecisionEngine(GeminiService geminiService, SignalSchemaValidator schemaValidator) {
+    public AiDecisionEngine(GeminiService geminiService, SignalSchemaValidator schemaValidator,
+                            ActivityFeedService activityFeed) {
         this.geminiService = geminiService;
         this.schemaValidator = schemaValidator;
+        this.activityFeed = activityFeed;
     }
 
     /**
@@ -40,16 +43,22 @@ public class AiDecisionEngine {
 
         try {
             String rawJson = geminiService.analyzeMarketData(window);
+            log.info("Raw LLM response for {}: {}", symbol, oneLine(rawJson));
             TradeDecisionSignal signal = schemaValidator.parseAndValidate(rawJson);
             log.info("AI decision for {} -> {} (conf {})",
                     symbol, signal.action(), signal.confidenceScore());
             return signal;
         } catch (SignalSchemaValidator.InvalidSignalException ex) {
+            String reason = "LLM output was malformed/invalid: " + ex.getMessage();
             log.warn("Malformed LLM output for {}; defaulting to HOLD: {}", symbol, ex.getMessage());
+            activityFeed.record(symbol, "REJECTED", reason);
             return TradeDecisionSignal.hold(symbol);
         } catch (Exception ex) {
-            // API timeout / connectivity / any other failure -> safe HOLD.
+            // API timeout / connectivity / missing key / any other failure -> safe HOLD.
+            String reason = "LLM call failed: " + ex.getMessage()
+                    + " (check GEMINI_API_KEY, model name & network).";
             log.warn("AI decision failed for {}; defaulting to HOLD: {}", symbol, ex.getMessage());
+            activityFeed.record(symbol, "REJECTED", reason);
             return TradeDecisionSignal.hold(symbol);
         }
     }
