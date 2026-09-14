@@ -286,6 +286,75 @@ def _clear_auth_query_params() -> None:
         pass
 
 
+# --- Selectable option catalogs for the dashboard dropdowns. ---
+TIMEFRAME_OPTIONS = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+PAIR_OPTIONS = [
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+    "EURJPY", "GBPJPY", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD",
+]
+TRADING_STYLE_OPTIONS = ["INTRADAY", "SCALPING", "SWING"]
+# Supported AI providers and the models each one commonly exposes. The label is
+# what the user sees; the value (provider id) is what the backend routes on.
+AI_PROVIDERS = {
+    "Gemini (Google)": "gemini",
+    "ChatGPT (OpenAI)": "openai",
+    "Claude (Anthropic)": "claude",
+    "DeepSeek": "deepseek",
+    "Grok (xAI)": "grok",
+    "Mistral": "mistral",
+}
+AI_MODELS_BY_PROVIDER = {
+    "gemini": [
+        "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash",
+        "gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro",
+    ],
+    "openai": ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "o3-mini"],
+    "claude": [
+        "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest",
+    ],
+    "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+    "grok": ["grok-2-latest", "grok-beta"],
+    "mistral": ["mistral-large-latest", "mistral-small-latest"],
+}
+
+
+def _mt5_remembered() -> dict[str, str]:
+    """Read remembered MT5 login/server from query params (Remember me)."""
+    try:
+        params = st.query_params
+
+        def _val(key: str) -> str:
+            raw = params.get(key)
+            v = raw if isinstance(raw, str) else (raw[0] if raw else "")
+            return unquote(v) if v else ""
+
+        return {"login": _val("mt5_login"), "server": _val("mt5_server")}
+    except Exception:
+        return {"login": "", "server": ""}
+
+
+def _remember_mt5(login: str, server: str) -> None:
+    """Persist MT5 login/server in query params so a refresh keeps them."""
+    try:
+        st.query_params["mt5_login"] = quote(str(login))
+        st.query_params["mt5_server"] = quote(str(server))
+    except Exception:
+        pass
+
+
+def _forget_mt5() -> None:
+    """Drop remembered MT5 login/server query params."""
+    try:
+        params = dict(st.query_params)
+        for key in ("mt5_login", "mt5_server"):
+            params.pop(key, None)
+        st.query_params.clear()
+        for k, v in params.items():
+            st.query_params[k] = v
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Auth + backend API helpers
 # ---------------------------------------------------------------------------
@@ -308,6 +377,7 @@ def _clear_session_auth() -> None:
     ):
         st.session_state.pop(key, None)
     _clear_auth_query_params()
+    _forget_mt5()
 
 
 def _is_unauthorized(resp: requests.Response | None) -> bool:
@@ -464,6 +534,32 @@ def post_guardrails(payload: dict[str, Any]) -> requests.Response:
     )
 
 
+def get_ai_settings() -> dict[str, Any] | None:
+    """Fetch current AI + strategy settings (API key is never returned)."""
+    try:
+        resp = _request_with_retry(
+            "GET", f"{BACKEND_BASE_URL}/api/ai/settings", headers=_auth_headers()
+        )
+    except requests.RequestException:
+        return None
+    if resp.ok:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            return None
+    return None
+
+
+def post_ai_settings(payload: dict[str, Any]) -> requests.Response:
+    return _request_with_retry(
+        "POST",
+        f"{BACKEND_BASE_URL}/api/ai/settings",
+        json=payload,
+        headers=_auth_headers(json_body=True),
+    )
+
+
 def post_start(account_id: str | None) -> requests.Response:
     params = {"accountId": account_id} if account_id else None
     return _request_with_retry(
@@ -595,10 +691,20 @@ with st.sidebar:
 
 with st.sidebar:
     st.markdown('<div class="tb-section">MT5 Broker Connection</div>', unsafe_allow_html=True)
+    _remembered = _mt5_remembered()
+    _remember_default = bool(_remembered.get("login") or _remembered.get("server"))
     with st.form("mt5_form"):
-        mt5_login = st.text_input("Account Number", value="", placeholder="e.g. 51234567")
+        mt5_login = st.text_input(
+            "Account Number", value=_remembered.get("login", ""), placeholder="e.g. 51234567"
+        )
         mt5_password = st.text_input("Password", value="", type="password")
-        mt5_server = st.text_input("Server Name", value="", placeholder="e.g. The5ers-Live")
+        mt5_server = st.text_input(
+            "Server Name", value=_remembered.get("server", ""), placeholder="e.g. The5ers-Live"
+        )
+        mt5_remember = st.checkbox(
+            "Remember me", value=_remember_default,
+            help="Keep account number & server filled after a refresh until you log out.",
+        )
         mt5_submit = st.form_submit_button("Connect / Save Credentials", use_container_width=True)
 
     if mt5_submit:
@@ -613,6 +719,11 @@ with st.sidebar:
                     st.success(f"MT5 credentials saved for {mt5_server.strip()}")
                     st.session_state["mt5_connected"] = True
                     st.session_state["account_id"] = mt5_login.strip()
+                    # Persist (or clear) the non-secret fields per the Remember-me choice.
+                    if mt5_remember:
+                        _remember_mt5(mt5_login.strip(), mt5_server.strip())
+                    else:
+                        _forget_mt5()
                 else:
                     msg = _format_api_error(resp, f"HTTP {resp.status_code}")
                     st.error(f"Connect failed: {msg}")
@@ -623,6 +734,83 @@ with st.sidebar:
         st.caption("MT5 credentials configured ✅")
 
 with st.sidebar:
+    st.markdown('<div class="tb-section">AI Model & Strategy</div>', unsafe_allow_html=True)
+    st.caption("Pick the model, supply its API key, and set timeframe / trading style.")
+
+    # Load current settings once so the controls reflect the backend state.
+    if "_ai_settings" not in st.session_state:
+        st.session_state["_ai_settings"] = get_ai_settings() or {}
+    _ai = st.session_state["_ai_settings"]
+
+    def _idx(options: list[str], value: str | None, default: int = 0) -> int:
+        try:
+            return options.index(value) if value in options else default
+        except Exception:
+            return default
+
+    # Provider select lives OUTSIDE the form so changing it immediately
+    # refreshes the model dropdown for that provider.
+    _provider_labels = list(AI_PROVIDERS.keys())
+    _current_provider_id = _ai.get("provider", "gemini")
+    _current_label = next(
+        (lbl for lbl, pid in AI_PROVIDERS.items() if pid == _current_provider_id),
+        _provider_labels[0],
+    )
+    ai_provider_label = st.selectbox(
+        "AI Provider", _provider_labels, index=_idx(_provider_labels, _current_label, 0)
+    )
+    ai_provider = AI_PROVIDERS[ai_provider_label]
+    _model_options = AI_MODELS_BY_PROVIDER.get(ai_provider, [])
+
+    with st.form("ai_settings_form"):
+        ai_model = st.selectbox(
+            "AI Model",
+            _model_options,
+            index=_idx(_model_options, _ai.get("model"), 0),
+        )
+        ai_api_key = st.text_input(
+            "API Key",
+            value="",
+            type="password",
+            placeholder=("•••• already set" if _ai.get("apiKeySet") else f"Paste your {ai_provider_label} API key"),
+            help="Stored in backend memory only. Leave blank to keep the existing key.",
+        )
+        ai_timeframe = st.selectbox(
+            "Timeframe",
+            TIMEFRAME_OPTIONS,
+            index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
+        )
+        ai_style = st.selectbox(
+            "Trading Type",
+            TRADING_STYLE_OPTIONS,
+            index=_idx(TRADING_STYLE_OPTIONS, _ai.get("tradingStyle"), 0),
+        )
+        ai_submit = st.form_submit_button("Save AI Settings", use_container_width=True)
+
+    if ai_submit:
+        ai_payload = {
+            "provider": ai_provider,
+            "model": ai_model,
+            "timeframe": ai_timeframe,
+            "tradingStyle": ai_style,
+        }
+        if ai_api_key.strip():
+            ai_payload["apiKey"] = ai_api_key.strip()
+        try:
+            resp = post_ai_settings(ai_payload)
+            if resp.ok:
+                st.session_state["_ai_settings"] = resp.json() if resp.content else ai_payload
+                st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}")
+            else:
+                msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+                st.error(f"AI settings rejected: {msg}")
+        except requests.RequestException as exc:
+            st.error(_friendly_network_error(exc))
+
+    if _ai.get("apiKeySet"):
+        st.caption("API key configured ✅")
+
+with st.sidebar:
     st.markdown('<div class="tb-section">AI Risk Guardrails</div>', unsafe_allow_html=True)
     st.caption("Define boundaries; the AI agent trades autonomously within them.")
     with st.form("guardrails_form"):
@@ -630,8 +818,8 @@ with st.sidebar:
         max_risk_percent = st.number_input(
             "Max Risk Per Trade (%)", min_value=0.1, max_value=100.0, value=1.0, step=0.1
         )
-        allowed_symbols_raw = st.text_input(
-            "Allowed Symbols (comma-separated)", value="EURUSD, XAUUSD"
+        allowed_symbols = st.multiselect(
+            "Trading Pairs", PAIR_OPTIONS, default=["EURUSD", "XAUUSD"]
         )
         max_drawdown_usd = st.number_input(
             "Max Drawdown (USD)", min_value=1.0, value=500.0, step=10.0
@@ -650,7 +838,7 @@ with st.sidebar:
         )
 
     if guardrails_submit:
-        symbols = [s.strip().upper() for s in allowed_symbols_raw.split(",") if s.strip()]
+        symbols = [s.strip().upper() for s in allowed_symbols if s.strip()]
         guardrails_payload = {
             "maxRiskPercent": float(max_risk_percent),
             "allowedSymbols": symbols,

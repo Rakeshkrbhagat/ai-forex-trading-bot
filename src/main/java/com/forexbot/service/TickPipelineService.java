@@ -28,7 +28,7 @@ public class TickPipelineService {
 
     private final BotStateManager stateManager;
     private final RiskFirewall riskFirewall;
-    private final GeminiService geminiService;
+    private final LlmRouterService llmRouter;
     private final MarketStructureFilter marketStructureFilter;
     private final ExecutionService executionService;
     private final TradeSignalValidator signalValidator;
@@ -37,7 +37,7 @@ public class TickPipelineService {
 
     public TickPipelineService(BotStateManager stateManager,
                                RiskFirewall riskFirewall,
-                               GeminiService geminiService,
+                               LlmRouterService llmRouter,
                                MarketStructureFilter marketStructureFilter,
                                ExecutionService executionService,
                                TradeSignalValidator signalValidator,
@@ -45,7 +45,7 @@ public class TickPipelineService {
                                AiDecisionEngine aiDecisionEngine) {
         this.stateManager = stateManager;
         this.riskFirewall = riskFirewall;
-        this.geminiService = geminiService;
+        this.llmRouter = llmRouter;
         this.marketStructureFilter = marketStructureFilter;
         this.executionService = executionService;
         this.signalValidator = signalValidator;
@@ -70,8 +70,8 @@ public class TickPipelineService {
                     "Risk firewall blocked trade: " + risk.reason()));
         }
 
-        // 2) Gemini market-structure evaluation.
-        String rawAnalysis = geminiService.analyzeMarketStructure(tick);
+        // 2) LLM market-structure evaluation (provider chosen at runtime).
+        String rawAnalysis = llmRouter.analyzeMarketStructure(tick);
         MarketAnalysis analysis = marketStructureFilter.parse(rawAnalysis);
 
         // 3) Binary TRENDING/SIDEWAYS filter.

@@ -30,6 +30,7 @@ public class AutonomousTradingAgent {
     private final TickPipelineService pipeline;
     private final ActivityFeedService activityFeed;
     private final BridgeWebSocketHandler bridgeHandler;
+    private final AiSettingsStore aiSettings;
 
     /** Timeframe + depth of the candle window fed to the LLM each cycle. */
     @Value("${agent.timeframe:M15}")
@@ -42,13 +43,21 @@ public class AutonomousTradingAgent {
                                   MarketDataService marketDataService,
                                   TickPipelineService pipeline,
                                   ActivityFeedService activityFeed,
-                                  BridgeWebSocketHandler bridgeHandler) {
+                                  BridgeWebSocketHandler bridgeHandler,
+                                  AiSettingsStore aiSettings) {
         this.stateManager = stateManager;
         this.guardrailStore = guardrailStore;
         this.marketDataService = marketDataService;
         this.pipeline = pipeline;
         this.activityFeed = activityFeed;
         this.bridgeHandler = bridgeHandler;
+        this.aiSettings = aiSettings;
+    }
+
+    /** Effective timeframe: dashboard override if set, else the configured default. */
+    private String effectiveTimeframe() {
+        String tf = aiSettings.effectiveTimeframe();
+        return (tf != null && !tf.isBlank()) ? tf : timeframe;
     }
 
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
@@ -63,7 +72,7 @@ public class AutonomousTradingAgent {
         }
 
         for (String symbol : guardrails.allowedSymbols()) {
-            marketDataService.fetchCandles(symbol, timeframe, candles).ifPresentOrElse(
+            marketDataService.fetchCandles(symbol, effectiveTimeframe(), candles).ifPresentOrElse(
                     this::evaluate,
                     () -> log.debug("No candle window for {}", symbol));
         }
@@ -90,7 +99,7 @@ public class AutonomousTradingAgent {
         }
 
         for (String symbol : guardrails.allowedSymbols()) {
-            var windowOpt = marketDataService.fetchCandles(symbol, timeframe, candles);
+            var windowOpt = marketDataService.fetchCandles(symbol, effectiveTimeframe(), candles);
             if (windowOpt.isEmpty() || windowOpt.get().isEmpty()) {
                 String reason = bridgeHandler.hasConnectedBridge()
                         ? "MT5 terminal not logged in, or " + symbol

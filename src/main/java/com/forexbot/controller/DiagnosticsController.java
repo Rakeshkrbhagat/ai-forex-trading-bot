@@ -7,7 +7,7 @@ import com.forexbot.dto.TradeDecisionSignal;
 import com.forexbot.service.BotStateManager;
 import com.forexbot.service.BridgeWebSocketHandler;
 import com.forexbot.service.ExecutionService;
-import com.forexbot.service.GeminiService;
+import com.forexbot.service.LlmRouterService;
 import com.forexbot.service.MarketDataService;
 import com.forexbot.service.RiskFirewall;
 import com.forexbot.service.RiskGuardrailStore;
@@ -42,7 +42,7 @@ public class DiagnosticsController {
     private static final Logger log = LoggerFactory.getLogger(DiagnosticsController.class);
 
     private final MarketDataService marketDataService;
-    private final GeminiService geminiService;
+    private final LlmRouterService llmRouter;
     private final SignalSchemaValidator schemaValidator;
     private final RiskFirewall riskFirewall;
     private final TradeSignalValidator signalValidator;
@@ -52,7 +52,7 @@ public class DiagnosticsController {
     private final BridgeWebSocketHandler bridgeHandler;
 
     public DiagnosticsController(MarketDataService marketDataService,
-                                 GeminiService geminiService,
+                                 LlmRouterService llmRouter,
                                  SignalSchemaValidator schemaValidator,
                                  RiskFirewall riskFirewall,
                                  TradeSignalValidator signalValidator,
@@ -61,7 +61,7 @@ public class DiagnosticsController {
                                  BotStateManager stateManager,
                                  BridgeWebSocketHandler bridgeHandler) {
         this.marketDataService = marketDataService;
-        this.geminiService = geminiService;
+        this.llmRouter = llmRouter;
         this.schemaValidator = schemaValidator;
         this.riskFirewall = riskFirewall;
         this.signalValidator = signalValidator;
@@ -142,12 +142,12 @@ public class DiagnosticsController {
         // Stage 3 — raw LLM call (what does the model actually SAY?).
         String rawLlm;
         try {
-            rawLlm = geminiService.analyzeMarketData(window);
+            rawLlm = llmRouter.analyzeMarketData(window);
         } catch (Exception ex) {
             report.put("stage3_llmCalled", false);
             report.put("stage3_llmError", ex.getMessage());
             report.put("stage3_note",
-                    "Gemini call failed. Check GEMINI_API_KEY, model name and network.");
+                    "LLM call failed. Check the selected AI provider, model name, API key and network.");
             return ResponseEntity.ok(report);
         }
         report.put("stage3_llmCalled", true);

@@ -17,13 +17,13 @@ public class AiDecisionEngine {
 
     private static final Logger log = LoggerFactory.getLogger(AiDecisionEngine.class);
 
-    private final GeminiService geminiService;
+    private final LlmRouterService llmRouter;
     private final SignalSchemaValidator schemaValidator;
     private final ActivityFeedService activityFeed;
 
-    public AiDecisionEngine(GeminiService geminiService, SignalSchemaValidator schemaValidator,
+    public AiDecisionEngine(LlmRouterService llmRouter, SignalSchemaValidator schemaValidator,
                             ActivityFeedService activityFeed) {
-        this.geminiService = geminiService;
+        this.llmRouter = llmRouter;
         this.schemaValidator = schemaValidator;
         this.activityFeed = activityFeed;
     }
@@ -42,7 +42,7 @@ public class AiDecisionEngine {
         }
 
         try {
-            String rawJson = geminiService.analyzeMarketData(window);
+            String rawJson = llmRouter.analyzeMarketData(window);
             log.info("Raw LLM response for {}: {}", symbol, oneLine(rawJson));
             TradeDecisionSignal signal = schemaValidator.parseAndValidate(rawJson);
             log.info("AI decision for {} -> {} (conf {})",
@@ -56,7 +56,7 @@ public class AiDecisionEngine {
         } catch (Exception ex) {
             // API timeout / connectivity / missing key / any other failure -> safe HOLD.
             String reason = "LLM call failed: " + ex.getMessage()
-                    + " (check GEMINI_API_KEY, model name & network).";
+                    + " (check the AI provider, model name, API key & network).";
             log.warn("AI decision failed for {}; defaulting to HOLD: {}", symbol, ex.getMessage());
             activityFeed.record(symbol, "REJECTED", reason);
             return TradeDecisionSignal.hold(symbol);

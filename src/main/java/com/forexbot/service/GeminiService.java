@@ -24,13 +24,14 @@ import java.util.regex.Pattern;
  * never leaked into request URLs / logs.
  */
 @Service
-public class GeminiService {
+public class GeminiService implements LlmTransport {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiService.class);
 
     private final WebClient geminiWebClient;
     private final GeminiProperties properties;
     private final MarketContextBuilder contextBuilder;
+    private final AiSettingsStore aiSettings;
 
     /** Auto-resolved model name (set when the configured one 404s). */
     private final java.util.concurrent.atomic.AtomicReference<String> resolvedModel =
@@ -40,10 +41,26 @@ public class GeminiService {
             Pattern.compile("models/([a-zA-Z0-9._-]+)");
 
     public GeminiService(WebClient geminiWebClient, GeminiProperties properties,
-                         MarketContextBuilder contextBuilder) {
+                         MarketContextBuilder contextBuilder, AiSettingsStore aiSettings) {
         this.geminiWebClient = geminiWebClient;
         this.properties = properties;
         this.contextBuilder = contextBuilder;
+        this.aiSettings = aiSettings;
+    }
+
+    @Override
+    public String providerId() {
+        return "gemini";
+    }
+
+    /** Generic prompt completion used by the multi-provider router. */
+    @Override
+    public String complete(String prompt, String context) {
+        if (!aiSettings.hasApiKey()) {
+            throw new IllegalStateException(
+                    "API key is not configured; set it in the dashboard AI settings or via env");
+        }
+        return extractText(generateContent(buildRequestBody(prompt), context));
     }
 
     /**
@@ -54,9 +71,9 @@ public class GeminiService {
      * @return the model's textual response (expected to contain JSON)
      */
     public String analyzeMarketStructure(MarketTickRequest tick) {
-        if (!properties.hasApiKey()) {
+        if (!aiSettings.hasApiKey()) {
             throw new IllegalStateException(
-                    "GEMINI_API_KEY is not configured; cannot call Gemini API");
+                    "GEMINI_API_KEY is not configured; set it in the dashboard AI settings or via env");
         }
         String prompt = buildMarketStructurePrompt(tick);
         return extractText(generateContent(buildRequestBody(prompt), "market-structure analysis"));
@@ -68,9 +85,9 @@ public class GeminiService {
      * model acting as an autonomous trading agent.
      */
     public String analyzeMarketData(MarketDataWindow window) {
-        if (!properties.hasApiKey()) {
+        if (!aiSettings.hasApiKey()) {
             throw new IllegalStateException(
-                    "GEMINI_API_KEY is not configured; cannot call Gemini API");
+                    "GEMINI_API_KEY is not configured; set it in the dashboard AI settings or via env");
         }
         String prompt = buildTradeDecisionPrompt(window);
         return extractText(generateContent(buildRequestBody(prompt), "trade-decision analysis"));
@@ -131,7 +148,7 @@ public class GeminiService {
         String path = "/v1beta/models/" + model + ":generateContent";
         return geminiWebClient.post()
                 .uri(path)
-                .header("x-goog-api-key", properties.getApiKey())
+                .header("x-goog-api-key", aiSettings.effectiveApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(requestBody)
                 .retrieve()
@@ -142,7 +159,7 @@ public class GeminiService {
 
     private String effectiveModel() {
         String cached = resolvedModel.get();
-        return (cached != null && !cached.isBlank()) ? cached : properties.getModel();
+        return (cached != null && !cached.isBlank()) ? cached : aiSettings.effectiveModel();
     }
 
     /**
@@ -155,13 +172,13 @@ public class GeminiService {
     private synchronized String resolveWorkingModel() {
         // Another thread may have resolved it while we waited on the lock.
         String cached = resolvedModel.get();
-        if (cached != null && !cached.isBlank() && !cached.equals(properties.getModel())) {
+        if (cached != null && !cached.isBlank() && !cached.equals(aiSettings.effectiveModel())) {
             return cached;
         }
         try {
             Map<String, Object> resp = geminiWebClient.get()
                     .uri("/v1beta/models")
-                    .header("x-goog-api-key", properties.getApiKey())
+                    .header("x-goog-api-key", aiSettings.effectiveApiKey())
                     .retrieve()
                     .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                     .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
@@ -220,8 +237,19 @@ public class GeminiService {
      * act as an autonomous trading agent and return a type-safe decision.
      */
     String buildTradeDecisionPrompt(MarketDataWindow window) {
+        String style = aiSettings.effectiveTradingStyle();
+        String styleGuidance = switch (style == null ? "INTRADAY" : style.toUpperCase()) {
+            case "SCALPING" -> "Trade as a SCALPER: target very short-term moves, tight stops and "
+                    + "quick take-profits; favour high-probability momentum bursts.";
+            case "SWING" -> "Trade as a SWING trader: hold for larger multi-session moves, wider "
+                    + "stops/targets aligned with the dominant trend and key levels.";
+            default -> "Trade as an INTRADAY trader: capture moves within the session, balancing "
+                    + "reward vs. risk and closing exposure intraday.";
+        };
         return """
                 You are an autonomous forex trading agent and risk-aware strategist.
+                Trading style: %s
+                %s
                 Analyze the recent price action and respond with STRICT JSON only,
                 no markdown, no commentary. Use this exact schema:
                 {
@@ -236,10 +264,11 @@ public class GeminiService {
                 - Only signal BUY or SELL on a clear, high-conviction setup; otherwise HOLD.
                 - For HOLD, set volume, sl and tp to 0.
                 - confidenceScore reflects conviction from 0.0 (none) to 1.0 (certain).
+                - Align stop-loss / take-profit distances with the stated trading style.
 
                 Market data context:
                 %s
-                """.formatted(contextBuilder.buildPromptPayload(window));
+                """.formatted(style, styleGuidance, contextBuilder.buildPromptPayload(window));
     }
 
     /**

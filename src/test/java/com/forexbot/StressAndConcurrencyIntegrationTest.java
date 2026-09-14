@@ -8,7 +8,7 @@ import com.forexbot.dto.MarketTickRequest;
 import com.forexbot.dto.RiskGuardrails;
 import com.forexbot.dto.TradeDecision;
 import com.forexbot.service.BotStateManager;
-import com.forexbot.service.GeminiService;
+import com.forexbot.service.LlmRouterService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,11 +76,11 @@ class StressAndConcurrencyIntegrationTest {
     private BotStateManager stateManager;
 
     @MockBean
-    private GeminiService geminiService;
+    private LlmRouterService llmRouter;
 
     @BeforeEach
     void stubGemini() {
-        when(geminiService.analyzeMarketStructure(any(MarketTickRequest.class)))
+        when(llmRouter.analyzeMarketStructure(any(MarketTickRequest.class)))
                 .thenReturn(TRENDING_BUY_JSON);
         authenticate();
     }
