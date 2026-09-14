@@ -479,8 +479,9 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
         "type_time": int(mt5.ORDER_TIME_GTC),
     }
 
-    log.info("Sending %s %s %.2f lots @ %.5f (SL=%s TP=%s)",
-             side, symbol, volume, price, base_payload["sl"], base_payload["tp"])
+    log.info("Sending %s %s %.2f lots @ %.*f (SL=%s TP=%s)",
+             side, symbol, volume, symbol_info.digits, price,
+             base_payload["sl"], base_payload["tp"])
 
     # Try each supported filling mode until one is accepted. An unsupported
     # filling mode is the most common cause of SEND_FAILED / retcode 10030.
@@ -552,8 +553,8 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
     }
 
     if accepted:
-        log.info("FILLED ticket=%s price=%.5f slippage=%.2f pips",
-                 response["orderTicket"], result.price, slippage_pips)
+        log.info("FILLED ticket=%s price=%.*f slippage=%.2f pips",
+                 response["orderTicket"], symbol_info.digits, result.price, slippage_pips)
     else:
         # Specific handling for common broker rejections (requote / closed market).
         log.warning("REJECTED retcode=%s (%s) comment=%s",

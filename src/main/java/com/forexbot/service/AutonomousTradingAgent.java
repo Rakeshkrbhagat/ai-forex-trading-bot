@@ -70,6 +70,9 @@ public class AutonomousTradingAgent {
         return positions != null && !positions.isEmpty();
     }
 
+    /** Guards against repeating the "waiting for open trade" console notice. */
+    private volatile boolean openTradeNoticeShown = false;
+
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
             initialDelayString = "${agent.initial-delay-ms:10000}")
     public void tickCycle() {
@@ -82,11 +85,22 @@ public class AutonomousTradingAgent {
         }
 
         // One trade at a time: don't evaluate or call the LLM while a position
-        // is still open — wait until it closes.
+        // is still open — wait until it closes. Announce it once so the operator
+        // can SEE why no new trade is being taken.
         if (hasOpenTrade()) {
+            if (!openTradeNoticeShown) {
+                var positions = bridgeHandler.getLastPositions();
+                String sym = (positions != null && !positions.isEmpty())
+                        ? String.valueOf(positions.get(0).get("symbol")) : "-";
+                activityFeed.record(sym, "HOLD",
+                        "Holding — an open trade must close before the next one "
+                        + "(one-trade-at-a-time). No AI call made.");
+                openTradeNoticeShown = true;
+            }
             log.debug("Open trade in progress; skipping cycle (one-trade-at-a-time).");
             return;
         }
+        openTradeNoticeShown = false;
 
         for (String symbol : guardrails.allowedSymbols()) {
             marketDataService.fetchCandles(symbol, effectiveTimeframe(), candles).ifPresentOrElse(
