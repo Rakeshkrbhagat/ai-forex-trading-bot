@@ -469,6 +469,10 @@ def post_stop() -> requests.Response:
     return _request_with_retry("POST", f"{API_BASE_URL}/stop", headers=_auth_headers())
 
 
+def post_run_cycle() -> requests.Response:
+    return _request_with_retry("POST", f"{API_BASE_URL}/run-cycle", headers=_auth_headers())
+
+
 def get_status() -> requests.Response:
     return _request_with_retry("GET", f"{API_BASE_URL}/status", headers=_auth_headers())
 
@@ -545,6 +549,13 @@ _persist_auth_to_query_params()
 if not st.session_state.get("_mt5_state_restored"):
     _restore_mt5_state()
     st.session_state["_mt5_state_restored"] = True
+    # Also seed the bot running state so the banner is correct after refresh.
+    try:
+        _sresp = get_status()
+        if _sresp.ok:
+            st.session_state["last_status"] = _sresp.json()
+    except requests.RequestException:
+        pass
 
 healthy, health_msg = get_health()
 _status_cls = "ok" if healthy else "bad"
@@ -655,17 +666,52 @@ with st.sidebar:
             st.error(_friendly_network_error(exc))
 
 st.subheader("Autonomous Engine")
-start_col, stop_col, refresh_col = st.columns(3)
 
-if start_col.button("Start AI", use_container_width=True):
+# Live bot state banner so the operator can see Start/Stop actually took effect.
+_bot_status = st.session_state.get("last_status") or {}
+_running = bool(_bot_status.get("running"))
+_state_cls = "ok" if _running else "bad"
+_state_txt = "● RUNNING" if _running else "● STOPPED"
+st.markdown(
+    f'<div class="tb-pill {_state_cls}" style="display:inline-block;margin-bottom:10px;">'
+    f'AI Engine: {_state_txt}</div>',
+    unsafe_allow_html=True,
+)
+
+start_col, cycle_col, stop_col, refresh_col = st.columns(4)
+
+if start_col.button("Start AI", use_container_width=True, type="primary"):
     try:
         resp = post_start(st.session_state.get("account_id"))
         if resp.ok:
             st.session_state["last_status"] = resp.json()
-            st.success("AI engine started")
+            # Kick one cycle immediately so the console visibly reacts.
+            try:
+                cyc = post_run_cycle()
+                if cyc.ok:
+                    results = cyc.json().get("results", [])
+                    st.success("AI engine started · " + (", ".join(results) if results else "cycle triggered"))
+                else:
+                    st.success("AI engine started")
+            except requests.RequestException:
+                st.success("AI engine started")
+            st.rerun()
         else:
             msg = _format_api_error(resp, f"HTTP {resp.status_code}")
             st.error(f"Start failed: {msg}")
+    except requests.RequestException as exc:
+        st.error(_friendly_network_error(exc))
+
+if cycle_col.button("Run Cycle Now", use_container_width=True):
+    try:
+        resp = post_run_cycle()
+        if resp.ok:
+            results = resp.json().get("results", [])
+            st.success("Cycle ran · " + (", ".join(results) if results else "see console"))
+            st.rerun()
+        else:
+            msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+            st.error(f"Run cycle failed: {msg}")
     except requests.RequestException as exc:
         st.error(_friendly_network_error(exc))
 
@@ -675,6 +721,7 @@ if stop_col.button("Stop AI", use_container_width=True):
         if resp.ok:
             st.session_state["last_status"] = resp.json()
             st.success("AI engine stopped")
+            st.rerun()
         else:
             msg = _format_api_error(resp, f"HTTP {resp.status_code}")
             st.error(f"Stop failed: {msg}")
@@ -686,6 +733,7 @@ if refresh_col.button("Refresh", use_container_width=True):
         resp = get_status()
         if resp.ok:
             st.session_state["last_status"] = resp.json()
+            st.rerun()
         else:
             msg = _format_api_error(resp, f"HTTP {resp.status_code}")
             st.error(f"Status failed: {msg}")

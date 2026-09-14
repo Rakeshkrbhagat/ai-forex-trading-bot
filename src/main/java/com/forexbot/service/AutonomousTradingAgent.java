@@ -8,6 +8,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Autonomous, LLM-driven trading loop. On a fixed cadence it ingests live market
  * data for each allowed symbol and feeds it through the tick pipeline, where the
@@ -25,6 +28,7 @@ public class AutonomousTradingAgent {
     private final RiskGuardrailStore guardrailStore;
     private final MarketDataService marketDataService;
     private final TickPipelineService pipeline;
+    private final ActivityFeedService activityFeed;
 
     /** Timeframe + depth of the candle window fed to the LLM each cycle. */
     @Value("${agent.timeframe:M15}")
@@ -35,11 +39,13 @@ public class AutonomousTradingAgent {
     public AutonomousTradingAgent(BotStateManager stateManager,
                                   RiskGuardrailStore guardrailStore,
                                   MarketDataService marketDataService,
-                                  TickPipelineService pipeline) {
+                                  TickPipelineService pipeline,
+                                  ActivityFeedService activityFeed) {
         this.stateManager = stateManager;
         this.guardrailStore = guardrailStore;
         this.marketDataService = marketDataService;
         this.pipeline = pipeline;
+        this.activityFeed = activityFeed;
     }
 
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
@@ -58,6 +64,49 @@ public class AutonomousTradingAgent {
                     this::evaluate,
                     () -> log.debug("No candle window for {}", symbol));
         }
+    }
+
+    /**
+     * Manual, on-demand trigger used by the dashboard "Run Cycle Now" / "Start AI"
+     * flow so the operator can immediately see the AI react. Unlike the scheduled
+     * loop it does NOT require {@code autonomousEnabled}; it always records an
+     * activity-feed entry per symbol (including a clear message when market data
+     * is unavailable) so the live console visibly updates.
+     *
+     * @return a short human-readable summary line per allowed symbol.
+     */
+    public List<String> runOnceNow() {
+        RiskGuardrails guardrails = guardrailStore.get();
+        List<String> summary = new ArrayList<>();
+
+        if (guardrails.allowedSymbols() == null || guardrails.allowedSymbols().isEmpty()) {
+            String msg = "No allowed symbols configured — set them in Risk Guardrails.";
+            activityFeed.record("-", "HOLD", msg);
+            summary.add(msg);
+            return summary;
+        }
+
+        for (String symbol : guardrails.allowedSymbols()) {
+            var windowOpt = marketDataService.fetchCandles(symbol, timeframe, candles);
+            if (windowOpt.isEmpty() || windowOpt.get().isEmpty()) {
+                String msg = "No market data for " + symbol
+                        + " (MT5 bridge offline or symbol unavailable).";
+                log.info("Manual cycle: {}", msg);
+                activityFeed.record(symbol, "HOLD", msg);
+                summary.add(symbol + ": no market data");
+                continue;
+            }
+            try {
+                TickPipelineService.PipelineResult result = pipeline.processWindow(windowOpt.get());
+                summary.add(symbol + ": " + result.decision().action());
+            } catch (Exception ex) {
+                String msg = "Evaluation failed for " + symbol + ": " + ex.getMessage();
+                log.error(msg, ex);
+                activityFeed.record(symbol, "REJECTED", msg);
+                summary.add(symbol + ": error");
+            }
+        }
+        return summary;
     }
 
     private void evaluate(MarketDataWindow window) {

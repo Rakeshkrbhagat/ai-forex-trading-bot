@@ -26,11 +26,14 @@ public class TradingBotController {
 
     private final BotStateManager stateManager;
     private final TickPipelineService tickPipeline;
+    private final com.forexbot.service.AutonomousTradingAgent agent;
 
     public TradingBotController(BotStateManager stateManager,
-                                TickPipelineService tickPipeline) {
+                                TickPipelineService tickPipeline,
+                                com.forexbot.service.AutonomousTradingAgent agent) {
         this.stateManager = stateManager;
         this.tickPipeline = tickPipeline;
+        this.agent = agent;
     }
 
     /**
@@ -49,6 +52,21 @@ public class TradingBotController {
     public ResponseEntity<BotStatus> stop() {
         stateManager.stop();
         return ResponseEntity.ok(snapshot());
+    }
+
+    /**
+     * Manually triggers ONE AI evaluation cycle right now (per allowed symbol),
+     * so the operator can immediately see the AI react in the activity console.
+     * Records an activity entry per symbol even when market data is unavailable.
+     */
+    @PostMapping("/run-cycle")
+    public ResponseEntity<java.util.Map<String, Object>> runCycle() {
+        java.util.List<String> summary = agent.runOnceNow();
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("triggered", true);
+        body.put("running", stateManager.isRunning());
+        body.put("results", summary);
+        return ResponseEntity.ok(body);
     }
 
     /**
