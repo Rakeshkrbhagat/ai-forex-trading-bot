@@ -48,7 +48,13 @@ def _inject_theme() -> None:
             --text: #e6e9ef;
         }
         .stApp { background: radial-gradient(1200px 600px at 20% -10%, #12181f 0%, var(--bg) 55%); }
-        #MainMenu, footer, header {visibility: hidden;}
+        #MainMenu, footer {visibility: hidden;}
+        /* Keep the header transparent but DO NOT hide it — it hosts the sidebar
+           expand/collapse arrow. Hiding it made the MT5 sidebar unreachable. */
+        header[data-testid="stHeader"] { background: transparent; }
+        /* Always keep the sidebar toggle visible & on top. */
+        [data-testid="collapsedControl"] { display: block !important; visibility: visible !important; z-index: 1000; }
+        [data-testid="stSidebarCollapsedControl"] { display: block !important; visibility: visible !important; z-index: 1000; }
         .block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1280px; }
 
         /* Headings */

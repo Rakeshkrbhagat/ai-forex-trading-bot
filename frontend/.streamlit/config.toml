@@ -10,5 +10,5 @@ font = "sans serif"
 toolbarMode = "minimal"
 
 [ui]
-hideTopBar = true
+hideTopBar = false
 
