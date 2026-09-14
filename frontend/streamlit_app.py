@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Any
+from urllib.parse import quote, unquote
 
 import requests
 import streamlit as st
@@ -40,183 +41,352 @@ BACKEND_BASE_URL = _backend_base()
 API_BASE_URL = os.getenv("FOREXBOT_API_URL", f"{BACKEND_BASE_URL}/api/bot")
 AUTH_BASE_URL = os.getenv("FOREXBOT_AUTH_URL", f"{BACKEND_BASE_URL}/api/auth")
 REQUEST_TIMEOUT = float(os.getenv("FOREXBOT_API_TIMEOUT", "10"))
+LOGIN_TIMEOUT = float(os.getenv("FOREXBOT_LOGIN_TIMEOUT", "30"))
+HTTP_RETRIES = int(os.getenv("FOREXBOT_HTTP_RETRIES", "2"))
+RETRY_BACKOFF_SECONDS = float(os.getenv("FOREXBOT_RETRY_BACKOFF", "1.0"))
 
 
-def _url(path: str) -> str:
-    """Join the API base with a relative path."""
-    return f"{API_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
-
-
-def _auth_url(path: str) -> str:
-    """Join the auth base with a relative path."""
-    return f"{AUTH_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
-
-
-def _auth_headers() -> dict[str, str]:
-    """Bearer-token header for authenticated backend calls."""
-    token = st.session_state.get("auth_token")
-    return {"Authorization": f"Bearer {token}"} if token else {}
-
-
-def login(username: str, password: str) -> tuple[bool, str]:
-    """Authenticate against the backend and store the bearer token."""
+def _format_api_error(resp: requests.Response, fallback: str) -> str:
+    """Convert backend error payloads into clean UI-friendly messages."""
     try:
-        resp = requests.post(
-            _auth_url("login"),
-            json={"username": username, "password": password},
-            timeout=REQUEST_TIMEOUT,
+        data = resp.json()
+        if isinstance(data, dict):
+            for key in ("error", "message", "detail", "status"):
+                value = data.get(key)
+                if value:
+                    return str(value)
+    except ValueError:
+        pass
+
+    # Avoid dumping full HTML/error pages into the UI.
+    text = (resp.text or "").strip().replace("\n", " ")
+    if text and len(text) < 180 and "<html" not in text.lower():
+        return text
+    return fallback
+
+
+def _friendly_network_error(exc: Exception) -> str:
+    """Human-readable network error text (no raw stack-like exception junk)."""
+    if isinstance(exc, requests.Timeout):
+        return (
+            "Backend timed out. Render may be waking up or under load. "
+            "Please retry in a few seconds."
         )
-        if resp.ok:
-            data = resp.json()
-            st.session_state["auth_token"] = data.get("token")
-            st.session_state["auth_user"] = data.get("username", username)
-            st.session_state["auth_expires"] = data.get("expiresAt")
-            return True, "Login successful"
-        if resp.status_code == 401:
-            return False, "Invalid username or password"
-        return False, f"Login failed (HTTP {resp.status_code})"
-    except requests.RequestException as exc:
-        return False, f"Failed to reach backend: {exc}"
+    if isinstance(exc, requests.ConnectionError):
+        return "Could not connect to backend. Check URL/network and try again."
+    return "Network error while contacting backend. Please retry."
+
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    *,
+    retries: int | None = None,
+    timeout: float | None = None,
+    retry_on_status: tuple[int, ...] = (408, 429, 500, 502, 503, 504),
+    **kwargs: Any,
+) -> requests.Response:
+    """HTTP helper with small retry/backoff for transient backend failures."""
+    attempts = (HTTP_RETRIES if retries is None else retries) + 1
+    last_exc: Exception | None = None
+
+    for attempt in range(attempts):
+        try:
+            resp = requests.request(method, url, timeout=timeout or REQUEST_TIMEOUT, **kwargs)
+            if resp.status_code in retry_on_status and attempt < attempts - 1:
+                time.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
+                continue
+            return resp
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
+
+    # Defensive fallback; the loop either returns or raises.
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Unexpected request retry state")
+
+
+def _restore_auth_from_query_params() -> None:
+    """Restore auth token from query params so browser refresh does not log out."""
+    if st.session_state.get("auth_token"):
+        return
+    try:
+        params = st.query_params
+        token = params.get("token")
+        user = params.get("user")
+        expires = params.get("exp")
+
+        token_val = token if isinstance(token, str) else (token[0] if token else None)
+        user_val = user if isinstance(user, str) else (user[0] if user else None)
+        exp_val = expires if isinstance(expires, str) else (expires[0] if expires else None)
+
+        if token_val:
+            st.session_state["auth_token"] = unquote(token_val)
+            if user_val:
+                st.session_state["auth_user"] = unquote(user_val)
+            if exp_val:
+                st.session_state["auth_expires"] = unquote(exp_val)
+    except Exception:
+        # Never crash UI over query-param parsing.
+        pass
+
+
+def _persist_auth_to_query_params() -> None:
+    """Persist auth token in URL query params for refresh resilience."""
+    token = st.session_state.get("auth_token")
+    if not token:
+        return
+    desired = {
+        "token": quote(str(token)),
+        "user": quote(str(st.session_state.get("auth_user", ""))),
+    }
+    exp = st.session_state.get("auth_expires")
+    if exp:
+        desired["exp"] = quote(str(exp))
+
+    current = dict(st.query_params)
+    if any(str(current.get(k, "")) != v for k, v in desired.items()):
+        st.query_params.clear()
+        for k, v in desired.items():
+            st.query_params[k] = v
+
+
+def _clear_auth_query_params() -> None:
+    """Remove auth-related query params on explicit logout."""
+    try:
+        params = dict(st.query_params)
+        for key in ("token", "user", "exp"):
+            params.pop(key, None)
+        st.query_params.clear()
+        for k, v in params.items():
+            st.query_params[k] = v
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Auth + backend API helpers
+# ---------------------------------------------------------------------------
+def _auth_headers(json_body: bool = False) -> dict[str, str]:
+    """Standard headers, including the bearer token when authenticated."""
+    headers: dict[str, str] = {}
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    token = st.session_state.get("auth_token")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _clear_session_auth() -> None:
+    """Wipe local auth/session state (used on explicit logout or hard 401)."""
+    for key in (
+        "auth_token", "auth_user", "auth_expires",
+        "mt5_connected", "account_id", "last_status",
+    ):
+        st.session_state.pop(key, None)
+    _clear_auth_query_params()
+
+
+def _is_unauthorized(resp: requests.Response | None) -> bool:
+    """Only an explicit 401 means the token is truly invalid/expired.
+
+    Transient errors (timeouts, 5xx, network) must NOT log the user out —
+    that was the cause of the random 'auto logout' behaviour.
+    """
+    return resp is not None and resp.status_code == 401
+
+
+def post_login(username: str, password: str) -> requests.Response:
+    # Use the longer login timeout so a cold-starting Render backend does not
+    # trip a 10s read timeout during authentication.
+    return _request_with_retry(
+        "POST",
+        f"{AUTH_BASE_URL}/login",
+        json={"username": username, "password": password},
+        headers={"Content-Type": "application/json"},
+        timeout=LOGIN_TIMEOUT,
+    )
 
 
 def logout() -> None:
-    """Revoke the token on the backend and clear the local session."""
+    """Best-effort server-side revoke, then clear local session + query params."""
     token = st.session_state.get("auth_token")
     if token:
         try:
-            requests.post(
-                _auth_url("logout"),
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=REQUEST_TIMEOUT,
+            _request_with_retry(
+                "POST", f"{AUTH_BASE_URL}/logout",
+                headers=_auth_headers(), retries=0, timeout=REQUEST_TIMEOUT,
             )
         except requests.RequestException:
-            pass
-    for key in ("auth_token", "auth_user", "auth_expires", "last_status", "account_id"):
-        st.session_state.pop(key, None)
+            pass  # Never block logout on a network error.
+    _clear_session_auth()
+
+
+def render_login() -> None:
+    """Login gate. Persists the token to query params so refresh stays signed in."""
+    st.title("🔐 AI Forex Trading Bot")
+    st.caption("Sign in to access the autonomous monitoring dashboard.")
+    with st.form("login_form"):
+        username = st.text_input("Username", value="")
+        password = st.text_input("Password", value="", type="password")
+        submit = st.form_submit_button("Log in", use_container_width=True)
+
+    if not submit:
+        return
+
+    if not username.strip() or not password:
+        st.error("Username and password are required.")
+        return
+
+    with st.spinner("Signing in… (backend may be waking up)"):
+        try:
+            resp = post_login(username.strip(), password)
+        except requests.RequestException as exc:
+            st.error(_friendly_network_error(exc))
+            return
+
+    if resp.ok:
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        token = data.get("token")
+        if not token:
+            st.error("Login succeeded but no token was returned by the backend.")
+            return
+        st.session_state["auth_token"] = token
+        st.session_state["auth_user"] = data.get("username") or username.strip()
+        if data.get("expiresAt"):
+            st.session_state["auth_expires"] = str(data.get("expiresAt"))
+        _persist_auth_to_query_params()
+        st.rerun()
+    elif resp.status_code == 401:
+        st.error("Login failed: invalid username or password.")
+    else:
+        st.error(f"Login failed: {_format_api_error(resp, f'HTTP {resp.status_code}')}")
 
 
 def get_health() -> tuple[bool, str]:
-    """Return (is_up, message) for the backend health endpoint."""
+    """Ping the backend health endpoint; returns (healthy, message)."""
     try:
-        resp = requests.get(_url("health"), timeout=REQUEST_TIMEOUT)
-        if resp.ok:
-            return True, resp.text.strip()
-        return False, f"HTTP {resp.status_code}"
+        resp = _request_with_retry("GET", f"{API_BASE_URL}/health", headers=_auth_headers())
     except requests.RequestException as exc:
-        return False, str(exc)
+        return False, _friendly_network_error(exc)
+    if resp.ok:
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                return True, str(data.get("status", "ok"))
+        except ValueError:
+            pass
+        return True, "ok"
+    return False, _format_api_error(resp, f"HTTP {resp.status_code}")
+
+
+def post_mt5_connect(login: int, password: str, server: str) -> requests.Response:
+    return _request_with_retry(
+        "POST",
+        f"{BACKEND_BASE_URL}/api/mt5/connect",
+        json={"login": login, "password": password, "server": server},
+        headers=_auth_headers(json_body=True),
+    )
+
+
+def post_guardrails(payload: dict[str, Any]) -> requests.Response:
+    return _request_with_retry(
+        "POST",
+        f"{BACKEND_BASE_URL}/api/risk/guardrails",
+        json=payload,
+        headers=_auth_headers(json_body=True),
+    )
 
 
 def post_start(account_id: str | None) -> requests.Response:
-    """Engage the autonomous AI trading engine."""
     params = {"accountId": account_id} if account_id else None
-    return requests.post(
-        _url("start"), params=params, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
+    return _request_with_retry(
+        "POST", f"{API_BASE_URL}/start", params=params, headers=_auth_headers()
     )
 
 
 def post_stop() -> requests.Response:
-    """Halt the autonomous AI trading engine."""
-    return requests.post(_url("stop"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
+    return _request_with_retry("POST", f"{API_BASE_URL}/stop", headers=_auth_headers())
 
 
 def get_status() -> requests.Response:
-    """Fetch the current bot status snapshot."""
-    return requests.get(_url("status"), headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
-
-
-def _mt5_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_MT5_URL", f"{BACKEND_BASE_URL}/api/mt5")
-    return f"{base.rstrip('/')}/{path.lstrip('/')}"
-
-
-def _risk_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_RISK_URL", f"{BACKEND_BASE_URL}/api/risk")
-    return f"{base.rstrip('/')}/{path.lstrip('/')}"
-
-
-def _monitor_url(path: str) -> str:
-    base = os.getenv("FOREXBOT_MONITOR_URL", f"{BACKEND_BASE_URL}/api/monitor")
-    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+    return _request_with_retry("GET", f"{API_BASE_URL}/status", headers=_auth_headers())
 
 
 def get_telemetry() -> dict[str, Any] | None:
-    """Fetch live bridge/account telemetry (balance, equity, connection)."""
     try:
-        resp = requests.get(_monitor_url("telemetry"), headers=_auth_headers(),
-                            timeout=REQUEST_TIMEOUT)
-        return resp.json() if resp.ok else None
+        resp = _request_with_retry(
+            "GET", f"{BACKEND_BASE_URL}/api/monitor/telemetry", headers=_auth_headers()
+        )
     except requests.RequestException:
         return None
+    if resp.ok:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            return None
+    return None
 
 
 def get_positions() -> list[dict[str, Any]]:
-    """Fetch open positions (for aggregate open P&L)."""
     try:
-        resp = requests.get(_monitor_url("positions"), headers=_auth_headers(),
-                            timeout=REQUEST_TIMEOUT)
-        return resp.json() if resp.ok else []
+        resp = _request_with_retry(
+            "GET", f"{BACKEND_BASE_URL}/api/monitor/positions", headers=_auth_headers()
+        )
     except requests.RequestException:
         return []
+    if resp.ok:
+        try:
+            data = resp.json()
+        except ValueError:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("positions", []) or []
+    return []
 
 
 def get_activity(limit: int = 40) -> list[dict[str, Any]]:
-    """Fetch the LLM activity / decision feed."""
     try:
-        resp = requests.get(_monitor_url("activity"), params={"limit": limit},
-                            headers=_auth_headers(), timeout=REQUEST_TIMEOUT)
-        return resp.json() if resp.ok else []
+        resp = _request_with_retry(
+            "GET",
+            f"{BACKEND_BASE_URL}/api/monitor/activity",
+            params={"limit": limit},
+            headers=_auth_headers(),
+        )
     except requests.RequestException:
         return []
+    if resp.ok:
+        try:
+            data = resp.json()
+        except ValueError:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("activity", []) or []
+    return []
 
 
-def post_mt5_connect(login: int, password: str, server: str) -> requests.Response:
-    """Send MT5 credentials to the backend for dynamic routing."""
-    payload = {"login": int(login), "password": password, "server": server}
-    return requests.post(
-        _mt5_url("connect"), json=payload, headers=_auth_headers(), timeout=REQUEST_TIMEOUT
-    )
-
-
-def post_guardrails(guardrails: dict[str, Any]) -> requests.Response:
-    """Send the risk guardrails configuration to the backend."""
-    return requests.post(
-        _risk_url("guardrails"), json=guardrails, headers=_auth_headers(),
-        timeout=REQUEST_TIMEOUT,
-    )
-
-
-st.set_page_config(
-    page_title="AI Forex Trading Bot",
-    page_icon="📈",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
-st.title("AI Forex Trading Bot - Monitoring Hub")
-
-
-def render_login() -> None:
-    """Render the login gate that guards the dashboard."""
-    st.subheader("Sign in")
-    st.info("Authentication required to access the trading dashboard.")
-    with st.form("login_form"):
-        username = st.text_input("Username", value="", autocomplete="username")
-        password = st.text_input(
-            "Password", value="", type="password", autocomplete="current-password"
-        )
-        submit = st.form_submit_button("Login", use_container_width=True)
-    if submit:
-        ok, message = login(username, password)
-        if ok:
-            st.success(message)
-            st.rerun()
-        else:
-            st.error(message)
-
+# Restore token before rendering auth gate.
+_restore_auth_from_query_params()
 
 # --- Authentication gate: nothing below renders until logged in. ---
 if not st.session_state.get("auth_token"):
     render_login()
     st.stop()
+
+# Keep query params synchronized once authenticated.
+_persist_auth_to_query_params()
 
 with st.sidebar:
     st.caption(f"Signed in as **{st.session_state.get('auth_user', 'user')}**")
@@ -253,9 +423,10 @@ with st.sidebar:
                     st.session_state["mt5_connected"] = True
                     st.session_state["account_id"] = mt5_login.strip()
                 else:
-                    st.error(f"Connect failed (HTTP {resp.status_code}): {resp.text}")
+                    msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+                    st.error(f"Connect failed: {msg}")
             except requests.RequestException as exc:
-                st.error(f"Failed to reach backend: {exc}")
+                st.error(_friendly_network_error(exc))
 
     if st.session_state.get("mt5_connected"):
         st.caption("MT5 credentials configured ✅")
@@ -304,9 +475,10 @@ with st.sidebar:
                 mode = "AUTONOMOUS" if autonomous_enabled else "manual"
                 st.success(f"Guardrails saved ({mode} mode)")
             else:
-                st.error(f"Guardrails rejected (HTTP {resp.status_code}): {resp.text}")
+                msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+                st.error(f"Guardrails rejected: {msg}")
         except requests.RequestException as exc:
-            st.error(f"Failed to reach backend: {exc}")
+            st.error(_friendly_network_error(exc))
 
 st.subheader("Autonomous Engine")
 start_col, stop_col, refresh_col = st.columns(3)
@@ -318,9 +490,10 @@ if start_col.button("Start AI", use_container_width=True):
             st.session_state["last_status"] = resp.json()
             st.success("AI engine started")
         else:
-            st.error(f"Start failed (HTTP {resp.status_code}): {resp.text}")
+            msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+            st.error(f"Start failed: {msg}")
     except requests.RequestException as exc:
-        st.error(f"Failed to reach backend: {exc}")
+        st.error(_friendly_network_error(exc))
 
 if stop_col.button("Stop AI", use_container_width=True):
     try:
@@ -329,9 +502,10 @@ if stop_col.button("Stop AI", use_container_width=True):
             st.session_state["last_status"] = resp.json()
             st.success("AI engine stopped")
         else:
-            st.error(f"Stop failed (HTTP {resp.status_code}): {resp.text}")
+            msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+            st.error(f"Stop failed: {msg}")
     except requests.RequestException as exc:
-        st.error(f"Failed to reach backend: {exc}")
+        st.error(_friendly_network_error(exc))
 
 if refresh_col.button("Refresh", use_container_width=True):
     try:
@@ -339,9 +513,10 @@ if refresh_col.button("Refresh", use_container_width=True):
         if resp.ok:
             st.session_state["last_status"] = resp.json()
         else:
-            st.error(f"Status failed (HTTP {resp.status_code}): {resp.text}")
+            msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+            st.error(f"Status failed: {msg}")
     except requests.RequestException as exc:
-        st.error(f"Failed to reach backend: {exc}")
+        st.error(_friendly_network_error(exc))
 
 st.divider()
 st.subheader("Live Telemetry")
