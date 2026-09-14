@@ -214,8 +214,30 @@ def require_token(fn):
 
 
 def _pip_size(symbol_info) -> float:
-    """A pip is 10 points for 5/3-digit symbols, otherwise 1 point."""
+    """Return the price distance of one 'pip' for stop/target sizing.
+
+    A stop of ``stopLossPips`` is multiplied by this value. For FX a pip is
+    10 points (5/3-digit) or 1 point. For metals / indices / crypto a raw
+    point is far too small (e.g. gold point = 0.01 -> a 20-pip stop would be
+    only $0.20 and get stopped out instantly), so we use instrument-aware
+    conventional pip sizes that produce sensible distances.
+    """
+    name = (getattr(symbol_info, "name", "") or "").upper()
     point = symbol_info.point
+
+    # Precious metals.
+    if "XAU" in name:            # Gold: 1 pip = $0.10 (20 pips = $2.00)
+        return 0.10
+    if "XAG" in name:            # Silver: 1 pip = $0.01
+        return 0.01
+
+    # Cash indices & crypto: 1 pip = 1 full price point.
+    index_crypto_keys = ("US30", "US500", "USTEC", "NAS", "SPX", "GER", "UK100",
+                         "JP225", "DJ", "NDX", "BTC", "ETH", "LTC", "XRP")
+    if any(k in name for k in index_crypto_keys):
+        return 1.0
+
+    # Standard FX.
     if symbol_info.digits in (3, 5):
         return point * 10
     return point
