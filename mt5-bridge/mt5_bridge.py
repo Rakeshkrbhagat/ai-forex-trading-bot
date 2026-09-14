@@ -610,7 +610,7 @@ async def _run_ws_session(url: str) -> None:
         open_timeout=WS_OPEN_TIMEOUT,
         close_timeout=10,
         ping_interval=20,
-        ping_timeout=20,
+        ping_timeout=60,
         max_queue=32,
     ) as ws:
         log.info("Connected to backend WebSocket %s", url)
