@@ -444,17 +444,17 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
     sl, tp = _enforce_min_stops(symbol_info, side, price, sl, tp)
 
     base_payload = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": volume,
-        "type": order_type,
-        "price": price,
-        "sl": round(float(sl), symbol_info.digits) if sl else 0.0,
-        "tp": round(float(tp), symbol_info.digits) if tp else 0.0,
-        "deviation": deviation,
-        "magic": magic,
+        "action": int(mt5.TRADE_ACTION_DEAL),
+        "symbol": str(symbol),
+        "volume": float(volume),
+        "type": int(order_type),
+        "price": float(price),
+        "sl": float(round(float(sl), symbol_info.digits)) if sl else 0.0,
+        "tp": float(round(float(tp), symbol_info.digits)) if tp else 0.0,
+        "deviation": int(deviation),
+        "magic": int(magic),
         "comment": comment,
-        "type_time": mt5.ORDER_TIME_GTC,
+        "type_time": int(mt5.ORDER_TIME_GTC),
     }
 
     log.info("Sending %s %s %.2f lots @ %.5f (SL=%s TP=%s)",
@@ -466,7 +466,7 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
     last_code = None
     last_err = None
     for filling in _supported_filling_modes(symbol_info):
-        request_payload = dict(base_payload, type_filling=filling)
+        request_payload = dict(base_payload, type_filling=int(filling))
         try:
             result = mt5.order_send(request_payload)
         except Exception as exc:  # terminal crash / IPC failure
@@ -476,9 +476,28 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
 
         if result is None:
             last_code, last_err = mt5.last_error()
-            log.warning("order_send returned None with filling=%s (%s): %s",
-                        filling, last_code, last_err)
-            continue
+            # Some MT5 builds reject the optional comment field ('Invalid
+            # "comment" argument'). Retry the SAME filling mode without it.
+            if last_err and "comment" in str(last_err).lower():
+                retry_payload = dict(request_payload)
+                retry_payload.pop("comment", None)
+                log.warning("Comment rejected by MT5; retrying without comment (filling=%s).",
+                            filling)
+                try:
+                    result = mt5.order_send(retry_payload)
+                except Exception as exc:
+                    log.exception("order_send (no-comment) raised for %s %s", side, symbol)
+                    return ({"accepted": False, "status": "EXECUTION_EXCEPTION",
+                             "message": f"order_send exception: {exc}", "timestamp": _now_iso()}, 500)
+                if result is None:
+                    last_code, last_err = mt5.last_error()
+                    log.warning("order_send still None without comment (filling=%s) (%s): %s",
+                                filling, last_code, last_err)
+                    continue
+            else:
+                log.warning("order_send returned None with filling=%s (%s): %s",
+                            filling, last_code, last_err)
+                continue
 
         # Retry only when the rejection is specifically about the fill mode.
         if result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
