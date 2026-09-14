@@ -53,6 +53,11 @@ public class AiDecisionEngine {
             log.warn("Malformed LLM output for {}; defaulting to HOLD: {}", symbol, ex.getMessage());
             activityFeed.record(symbol, "REJECTED", reason);
             return TradeDecisionSignal.hold(symbol);
+        } catch (LlmRouterService.RateLimitedException ex) {
+            // Provider quota / rate-limit: back off quietly instead of spamming.
+            log.warn("AI rate-limited for {}; holding: {}", symbol, ex.getMessage());
+            activityFeed.record(symbol, "HOLD", "AI paused (rate limit): " + ex.getMessage());
+            return TradeDecisionSignal.hold(symbol);
         } catch (Exception ex) {
             // API timeout / connectivity / missing key / any other failure -> safe HOLD.
             String reason = "LLM call failed: " + ex.getMessage()

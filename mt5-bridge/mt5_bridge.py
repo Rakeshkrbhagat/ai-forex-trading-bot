@@ -184,6 +184,55 @@ def _pip_size(symbol_info) -> float:
     return point
 
 
+def _supported_filling_modes(symbol_info) -> list:
+    """Return the order-filling modes to try, best match first.
+
+    Brokers advertise supported modes via ``symbol_info.filling_mode`` (a
+    bitmask). Sending an unsupported mode makes ``order_send`` fail (a very
+    common cause of ``SEND_FAILED`` on demo/prop symbols like XAUUSD), so we
+    try the advertised mode(s) first and fall back to the rest.
+    """
+    if mt5 is None:
+        return []
+    flags = getattr(symbol_info, "filling_mode", 0) or 0
+    preferred = []
+    # SYMBOL_FILLING_FOK = 1, SYMBOL_FILLING_IOC = 2 (bitmask).
+    if flags & 1:
+        preferred.append(mt5.ORDER_FILLING_FOK)
+    if flags & 2:
+        preferred.append(mt5.ORDER_FILLING_IOC)
+    # Always include the remaining modes as fallbacks.
+    for mode in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+        if mode not in preferred:
+            preferred.append(mode)
+    return preferred
+
+
+def _enforce_min_stops(symbol_info, side: str, price: float, sl, tp):
+    """Clamp SL/TP so they respect the broker's minimum stop distance.
+
+    Orders whose SL/TP sit inside ``trade_stops_level`` points from price are
+    rejected with INVALID_STOPS — another frequent ``SEND_FAILED`` cause on
+    gold. We push the levels out to the minimum allowed distance.
+    """
+    point = symbol_info.point or 0.0
+    min_points = getattr(symbol_info, "trade_stops_level", 0) or 0
+    if min_points <= 0 or point <= 0:
+        return sl, tp
+    min_dist = min_points * point
+    if sl is not None:
+        if side == "BUY" and (price - sl) < min_dist:
+            sl = price - min_dist
+        elif side == "SELL" and (sl - price) < min_dist:
+            sl = price + min_dist
+    if tp is not None:
+        if side == "BUY" and (tp - price) < min_dist:
+            tp = price + min_dist
+        elif side == "SELL" and (price - tp) < min_dist:
+            tp = price - min_dist
+    return sl, tp
+
+
 def _retcode_reason(retcode) -> str:
     """Map an MT5 order retcode to a human-readable reason for the dashboard."""
     if mt5 is None:
@@ -197,6 +246,7 @@ def _retcode_reason(retcode) -> str:
         mt5.TRADE_RETCODE_INVALID_VOLUME: "Invalid volume/lot size",
         mt5.TRADE_RETCODE_INVALID_PRICE: "Invalid price",
         mt5.TRADE_RETCODE_INVALID_STOPS: "Invalid stops (SL/TP)",
+        mt5.TRADE_RETCODE_INVALID_FILL: "Unsupported filling mode",
         mt5.TRADE_RETCODE_NO_MONEY: "Insufficient funds",
         mt5.TRADE_RETCODE_MARKET_CLOSED: "Market closed",
         mt5.TRADE_RETCODE_TRADE_DISABLED: "Trading disabled",
@@ -347,7 +397,10 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
         if tp_pips:
             tp = price + tp_pips * pip if side == "BUY" else price - tp_pips * pip
 
-    request_payload = {
+    # Respect the broker's minimum stop distance (prevents INVALID_STOPS).
+    sl, tp = _enforce_min_stops(symbol_info, side, price, sl, tp)
+
+    base_payload = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": volume,
@@ -359,23 +412,42 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
         "magic": magic,
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
     log.info("Sending %s %s %.2f lots @ %.5f (SL=%s TP=%s)",
-             side, symbol, volume, price, request_payload["sl"], request_payload["tp"])
-    try:
-        result = mt5.order_send(request_payload)
-    except Exception as exc:  # terminal crash / IPC failure
-        log.exception("order_send raised an exception for %s %s", side, symbol)
-        return ({"accepted": False, "status": "EXECUTION_EXCEPTION",
-                 "message": f"order_send exception: {exc}", "timestamp": _now_iso()}, 500)
+             side, symbol, volume, price, base_payload["sl"], base_payload["tp"])
+
+    # Try each supported filling mode until one is accepted. An unsupported
+    # filling mode is the most common cause of SEND_FAILED / retcode 10030.
+    result = None
+    last_code = None
+    last_err = None
+    for filling in _supported_filling_modes(symbol_info):
+        request_payload = dict(base_payload, type_filling=filling)
+        try:
+            result = mt5.order_send(request_payload)
+        except Exception as exc:  # terminal crash / IPC failure
+            log.exception("order_send raised an exception for %s %s", side, symbol)
+            return ({"accepted": False, "status": "EXECUTION_EXCEPTION",
+                     "message": f"order_send exception: {exc}", "timestamp": _now_iso()}, 500)
+
+        if result is None:
+            last_code, last_err = mt5.last_error()
+            log.warning("order_send returned None with filling=%s (%s): %s",
+                        filling, last_code, last_err)
+            continue
+
+        # Retry only when the rejection is specifically about the fill mode.
+        if result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
+            log.warning("Filling mode %s rejected (INVALID_FILL); trying next.", filling)
+            continue
+        break
 
     if result is None:
-        code, err = mt5.last_error()
-        log.error("order_send returned None (%s): %s", code, err)
+        log.error("order_send failed for all filling modes (%s): %s", last_code, last_err)
         return ({"accepted": False, "status": "SEND_FAILED",
-                 "brokerRetcode": code, "message": err, "timestamp": _now_iso()}, 502)
+                 "brokerRetcode": last_code, "message": last_err or "order_send returned None",
+                 "timestamp": _now_iso()}, 502)
 
     accepted = result.retcode == mt5.TRADE_RETCODE_DONE
     slippage_pips = abs(result.price - price) / pip if pip else 0.0
