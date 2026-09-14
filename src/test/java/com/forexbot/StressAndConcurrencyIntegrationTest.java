@@ -126,7 +126,7 @@ class StressAndConcurrencyIntegrationTest {
         // Guardrails must permit the traded symbol; keep the drawdown limit equal
         // to the configured max loss so the firewall + guardrails stay consistent.
         RiskGuardrails guardrails = new RiskGuardrails(
-                1.0, List.of("EUR/USD"), maxLoss, 20, 40, 100_000.0, false);
+                1.0, List.of("EUR/USD"), maxLoss, 20, 40, 100_000.0, false, 0.0);
         ResponseEntity<RiskGuardrails> g = rest.postForEntity(
                 "http://localhost:" + port + "/api/risk/guardrails", guardrails, RiskGuardrails.class);
         assertThat(g.getStatusCode()).isEqualTo(HttpStatus.OK);

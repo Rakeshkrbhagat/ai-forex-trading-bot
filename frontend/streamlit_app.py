@@ -821,6 +821,11 @@ with st.sidebar:
         allowed_symbols = st.multiselect(
             "Trading Pairs", PAIR_OPTIONS, default=["EURUSD", "XAUUSD"]
         )
+        lot_size = st.number_input(
+            "Lot Size (0 = auto risk-based)",
+            min_value=0.0, max_value=100.0, value=0.10, step=0.01, key="gr_lot",
+            help="Fixed order size in lots. Set 0 to size automatically from Max Risk % and Stop Loss.",
+        )
         max_drawdown_usd = st.number_input(
             "Max Drawdown (USD)", min_value=1.0, value=500.0, step=10.0
         )
@@ -847,6 +852,7 @@ with st.sidebar:
             "takeProfitPips": int(gr_take_profit_pips),
             "accountBalanceUsd": float(account_balance_usd),
             "autonomousEnabled": bool(autonomous_enabled),
+            "lotSize": float(lot_size),
         }
         try:
             resp = post_guardrails(guardrails_payload)

@@ -62,6 +62,11 @@ public class TradeSignalValidator {
     }
 
     private double computeVolume(RiskGuardrails guardrails) {
+        // User-selected fixed lot size takes precedence when provided.
+        if (guardrails.lotSize() > 0.0) {
+            double fixed = Math.max(MIN_LOT, Math.min(MAX_LOT, guardrails.lotSize()));
+            return Math.round(fixed * 100.0) / 100.0;
+        }
         double riskAmount = guardrails.accountBalanceUsd() * (guardrails.maxRiskPercent() / 100.0);
         int slPips = Math.max(1, guardrails.stopLossPips());
         double lots = riskAmount / (slPips * PIP_VALUE_PER_LOT);

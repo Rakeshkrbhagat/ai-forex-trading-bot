@@ -31,7 +31,14 @@ public record RiskGuardrails(
         double accountBalanceUsd,
 
         /** Master switch enabling the autonomous trading loop. */
-        boolean autonomousEnabled
+        boolean autonomousEnabled,
+
+        /**
+         * Fixed order size in lots chosen by the user. When greater than 0 this
+         * overrides risk-based position sizing; when 0 the size is derived from
+         * {@link #maxRiskPercent()} and {@link #stopLossPips()}.
+         */
+        double lotSize
 ) {
 
     /** Sensible defaults used until the user configures guardrails. */
@@ -43,7 +50,8 @@ public record RiskGuardrails(
                 20,
                 40,
                 10_000.0,
-                false
+                false,
+                0.0
         );
     }
 
