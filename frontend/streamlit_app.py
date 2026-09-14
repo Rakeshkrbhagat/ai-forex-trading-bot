@@ -984,17 +984,70 @@ st.caption("Live stream of the LLM's market analysis, reasoning and BUY / SELL /
 
 _DECISION_ICON = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪", "REJECTED": "⛔"}
 
+
+def _classify_decision(action: str, message: str) -> tuple[str, str]:
+    """Split an activity message into (status, rule/reason) so the operator can
+    see WHY the AI passed or blocked a trade."""
+    msg = message or ""
+    action = (action or "").upper()
+
+    # Executed / attempted order lines look like:
+    #   "BUY 0.50 lots @ 4293 -> SEND_FAILED (AI window decision (conf 0.75))"
+    if "->" in msg:
+        left, _, right = msg.partition("->")
+        status_part = right.strip()
+        # The rule/rationale is the trailing "( ... )" segment.
+        rule = status_part
+        if "(" in status_part:
+            status_code = status_part[: status_part.find("(")].strip()
+            rule = status_part[status_part.find("(") + 1 : status_part.rfind(")")].strip()
+        else:
+            status_code = status_part
+        passed = any(k in status_code.upper() for k in ("DONE", "PLACED", "ACCEPT", "FILLED", "OK"))
+        status = ("✅ EXECUTED · " if passed else "❌ FAILED · ") + status_code
+        return status, rule or left.strip()
+
+    # Rule-based blocks / holds.
+    if action == "REJECTED":
+        return "⛔ BLOCKED", msg
+    if action == "HOLD":
+        return "⏸ HOLD", msg
+    if action in ("BUY", "SELL"):
+        return "🟢 SIGNAL", msg
+    return action or "•", msg
+
+
 activity = get_activity(limit=40)
 if activity:
-    lines = []
+    # 1) Human-friendly decision table — WHICH RULE drove each pass/fail.
+    st.markdown("**Decision rules — why each trade passed or was blocked**")
+    rows = []
     for entry in activity:
         ts = (entry.get("timestamp") or "")[:19].replace("T", " ")
         action = str(entry.get("action", "")).upper()
-        icon = _DECISION_ICON.get(action, "•")
-        lines.append(
-            f"{icon} [{ts}] {entry.get('symbol', '')} {action}: {entry.get('message', '')}"
+        status, rule = _classify_decision(action, entry.get("message", ""))
+        rows.append(
+            {
+                "Time": ts,
+                "Symbol": entry.get("symbol", ""),
+                "Decision": f"{_DECISION_ICON.get(action, '•')} {action}",
+                "Result": status,
+                "Rule / Reason": rule,
+            }
         )
-    st.code("\n".join(lines), language="text")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    # 2) Raw stream (kept for detail / copy-paste).
+    with st.expander("Raw activity log", expanded=False):
+        lines = []
+        for entry in activity:
+            ts = (entry.get("timestamp") or "")[:19].replace("T", " ")
+            action = str(entry.get("action", "")).upper()
+            icon = _DECISION_ICON.get(action, "•")
+            lines.append(
+                f"{icon} [{ts}] {entry.get('symbol', '')} {action}: {entry.get('message', '')}"
+            )
+        st.code("\n".join(lines), language="text")
 else:
     st.info("Waiting for the AI engine to stream market analysis...")
 
