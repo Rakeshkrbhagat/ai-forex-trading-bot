@@ -22,6 +22,119 @@ from urllib.parse import quote, unquote
 import requests
 import streamlit as st
 
+# --- Page config MUST be the first Streamlit call. ---
+st.set_page_config(
+    page_title="AI Forex Trading Bot",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def _inject_theme() -> None:
+    """Professional dark trading-desk look & feel."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --accent: #00d09c;
+            --accent-red: #f6465d;
+            --accent-amber: #f0b90b;
+            --bg: #0b0e11;
+            --panel: #151a21;
+            --panel-2: #1c232c;
+            --border: #262d38;
+            --muted: #8b95a5;
+            --text: #e6e9ef;
+        }
+        .stApp { background: radial-gradient(1200px 600px at 20% -10%, #12181f 0%, var(--bg) 55%); }
+        #MainMenu, footer, header {visibility: hidden;}
+        .block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1280px; }
+
+        /* Headings */
+        h1, h2, h3, h4 { color: var(--text); font-weight: 700; letter-spacing: -0.01em; }
+        .stCaption, .st-emotion-cache-1 .stMarkdown p { color: var(--muted); }
+
+        /* Cards / panels */
+        div[data-testid="stMetric"] {
+            background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px 18px;
+            box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+        }
+        div[data-testid="stMetricLabel"] p { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }
+        div[data-testid="stMetricValue"] { color: var(--text); font-weight: 700; }
+
+        /* Buttons */
+        .stButton > button, .stFormSubmitButton > button {
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--panel-2);
+            color: var(--text);
+            font-weight: 600;
+            transition: all .15s ease;
+        }
+        .stButton > button:hover, .stFormSubmitButton > button:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(0,208,156,0.12);
+        }
+        .stFormSubmitButton > button {
+            background: linear-gradient(90deg, var(--accent) 0%, #00b487 100%);
+            color: #04120d; border: none;
+        }
+        .stFormSubmitButton > button:hover { color: #04120d; filter: brightness(1.05); }
+
+        /* Inputs */
+        .stTextInput input, .stNumberInput input, .stTextArea textarea {
+            background: var(--panel) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 10px !important;
+            color: var(--text) !important;
+        }
+        .stTextInput input:focus, .stNumberInput input:focus { border-color: var(--accent) !important; }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background: #0d1116;
+            border-right: 1px solid var(--border);
+        }
+        section[data-testid="stSidebar"] .stForm { border: 1px solid var(--border); border-radius: 12px; padding: 6px 10px; background: var(--panel); }
+
+        /* Alerts */
+        div[data-testid="stAlert"] { border-radius: 12px; border: 1px solid var(--border); }
+
+        /* Dataframe */
+        div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+        /* Code / console */
+        .stCode, pre { background: #05070a !important; border: 1px solid var(--border) !important; border-radius: 12px !important; }
+
+        /* Custom header bar */
+        .tb-appbar {
+            display:flex; align-items:center; justify-content:space-between;
+            padding: 14px 20px; margin-bottom: 14px;
+            background: linear-gradient(90deg, var(--panel) 0%, var(--panel-2) 100%);
+            border: 1px solid var(--border); border-radius: 16px;
+        }
+        .tb-brand { display:flex; align-items:center; gap:12px; }
+        .tb-logo { font-size: 1.6rem; }
+        .tb-title { font-size: 1.15rem; font-weight: 700; color: var(--text); line-height:1.1; }
+        .tb-sub { font-size: 0.75rem; color: var(--muted); }
+        .tb-pill { padding: 6px 14px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; border:1px solid var(--border); }
+        .tb-pill.ok { color: var(--accent); background: rgba(0,208,156,0.10); border-color: rgba(0,208,156,0.35); }
+        .tb-pill.bad { color: var(--accent-red); background: rgba(246,70,93,0.10); border-color: rgba(246,70,93,0.35); }
+        .tb-pill.warn { color: var(--accent-amber); background: rgba(240,185,11,0.10); border-color: rgba(240,185,11,0.35); }
+        .tb-section { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 8px 0 2px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inject_theme()
+
 # Single source of truth for the backend. On Streamlit Cloud set FOREXBOT_BACKEND_URL
 # (or add it to .streamlit/secrets.toml) to your Render URL, e.g.
 #   https://ai-forex-trading-bot.onrender.com
@@ -228,46 +341,57 @@ def logout() -> None:
 
 def render_login() -> None:
     """Login gate. Persists the token to query params so refresh stays signed in."""
-    st.title("🔐 AI Forex Trading Bot")
-    st.caption("Sign in to access the autonomous monitoring dashboard.")
-    with st.form("login_form"):
-        username = st.text_input("Username", value="")
-        password = st.text_input("Password", value="", type="password")
-        submit = st.form_submit_button("Log in", use_container_width=True)
+    _, mid, _ = st.columns([1, 1.15, 1])
+    with mid:
+        st.markdown(
+            """
+            <div class="tb-appbar" style="flex-direction:column;text-align:center;gap:6px;padding:26px 20px;">
+                <div class="tb-logo" style="font-size:2.4rem;">📈</div>
+                <div class="tb-title" style="font-size:1.4rem;">AI Forex Trading Bot</div>
+                <div class="tb-sub">Autonomous trading desk · Risk-guarded execution</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("login_form"):
+            st.markdown('<div class="tb-section">Account Sign-in</div>', unsafe_allow_html=True)
+            username = st.text_input("Username", value="", placeholder="Enter username")
+            password = st.text_input("Password", value="", type="password", placeholder="Enter password")
+            submit = st.form_submit_button("Log in", use_container_width=True)
 
-    if not submit:
-        return
-
-    if not username.strip() or not password:
-        st.error("Username and password are required.")
-        return
-
-    with st.spinner("Signing in… (backend may be waking up)"):
-        try:
-            resp = post_login(username.strip(), password)
-        except requests.RequestException as exc:
-            st.error(_friendly_network_error(exc))
+        if not submit:
             return
 
-    if resp.ok:
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-        token = data.get("token")
-        if not token:
-            st.error("Login succeeded but no token was returned by the backend.")
+        if not username.strip() or not password:
+            st.error("Username and password are required.")
             return
-        st.session_state["auth_token"] = token
-        st.session_state["auth_user"] = data.get("username") or username.strip()
-        if data.get("expiresAt"):
-            st.session_state["auth_expires"] = str(data.get("expiresAt"))
-        _persist_auth_to_query_params()
-        st.rerun()
-    elif resp.status_code == 401:
-        st.error("Login failed: invalid username or password.")
-    else:
-        st.error(f"Login failed: {_format_api_error(resp, f'HTTP {resp.status_code}')}")
+
+        with st.spinner("Signing in… (backend may be waking up)"):
+            try:
+                resp = post_login(username.strip(), password)
+            except requests.RequestException as exc:
+                st.error(_friendly_network_error(exc))
+                return
+
+        if resp.ok:
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
+            token = data.get("token")
+            if not token:
+                st.error("Login succeeded but no token was returned by the backend.")
+                return
+            st.session_state["auth_token"] = token
+            st.session_state["auth_user"] = data.get("username") or username.strip()
+            if data.get("expiresAt"):
+                st.session_state["auth_expires"] = str(data.get("expiresAt"))
+            _persist_auth_to_query_params()
+            st.rerun()
+        elif resp.status_code == 401:
+            st.error("Login failed: invalid username or password.")
+        else:
+            st.error(f"Login failed: {_format_api_error(resp, f'HTTP {resp.status_code}')}")
 
 
 def get_health() -> tuple[bool, str]:
@@ -388,7 +512,28 @@ if not st.session_state.get("auth_token"):
 # Keep query params synchronized once authenticated.
 _persist_auth_to_query_params()
 
+healthy, health_msg = get_health()
+_status_cls = "ok" if healthy else "bad"
+_status_txt = f"● Backend Online · {health_msg}" if healthy else f"● Backend Offline · {health_msg}"
+
+st.markdown(
+    f"""
+    <div class="tb-appbar">
+        <div class="tb-brand">
+            <div class="tb-logo">📈</div>
+            <div>
+                <div class="tb-title">AI Forex Trading Bot</div>
+                <div class="tb-sub">Autonomous trading desk · Signed in as {st.session_state.get('auth_user', 'user')}</div>
+            </div>
+        </div>
+        <div class="tb-pill {_status_cls}">{_status_txt}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 with st.sidebar:
+    st.markdown('<div class="tb-section">Session</div>', unsafe_allow_html=True)
     st.caption(f"Signed in as **{st.session_state.get('auth_user', 'user')}**")
     if st.session_state.get("auth_expires"):
         st.caption(f"Session expires: {st.session_state['auth_expires']}")
@@ -396,14 +541,9 @@ with st.sidebar:
         logout()
         st.rerun()
 
-healthy, health_msg = get_health()
-if healthy:
-    st.success(f"Backend reachable at {API_BASE_URL} (health: {health_msg})")
-else:
-    st.error(f"Backend unreachable at {API_BASE_URL} - {health_msg}")
 
 with st.sidebar:
-    st.header("MT5 Broker Connection")
+    st.markdown('<div class="tb-section">MT5 Broker Connection</div>', unsafe_allow_html=True)
     with st.form("mt5_form"):
         mt5_login = st.text_input("Account Number", value="", placeholder="e.g. 51234567")
         mt5_password = st.text_input("Password", value="", type="password")
@@ -432,7 +572,7 @@ with st.sidebar:
         st.caption("MT5 credentials configured ✅")
 
 with st.sidebar:
-    st.header("AI Risk Guardrails")
+    st.markdown('<div class="tb-section">AI Risk Guardrails</div>', unsafe_allow_html=True)
     st.caption("Define boundaries; the AI agent trades autonomously within them.")
     with st.form("guardrails_form"):
         autonomous_enabled = st.checkbox("Enable Autonomous AI Trading", value=False)
