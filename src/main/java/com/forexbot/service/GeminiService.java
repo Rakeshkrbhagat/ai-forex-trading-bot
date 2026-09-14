@@ -30,6 +30,10 @@ public class GeminiService {
     private final GeminiProperties properties;
     private final MarketContextBuilder contextBuilder;
 
+    /** Auto-resolved model name (set when the configured one 404s). */
+    private final java.util.concurrent.atomic.AtomicReference<String> resolvedModel =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
     public GeminiService(WebClient geminiWebClient, GeminiProperties properties,
                          MarketContextBuilder contextBuilder) {
         this.geminiWebClient = geminiWebClient;
@@ -49,34 +53,8 @@ public class GeminiService {
             throw new IllegalStateException(
                     "GEMINI_API_KEY is not configured; cannot call Gemini API");
         }
-
         String prompt = buildMarketStructurePrompt(tick);
-        Map<String, Object> requestBody = buildRequestBody(prompt);
-
-        String path = "/v1beta/models/" + properties.getModel() + ":generateContent";
-
-        try {
-            Map<String, Object> response = geminiWebClient.post()
-                    .uri(path)
-                    // Secure authentication: API key passed as a header, not in the URL.
-                    .header("x-goog-api-key", properties.getApiKey())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(requestBody)
-                    .retrieve()
-                    .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
-                    .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
-                    .block();
-
-            return extractText(response);
-        } catch (WebClientResponseException e) {
-            log.error("Gemini API returned {} for market-structure analysis",
-                    e.getStatusCode(), e);
-            throw new GeminiClientException(
-                    "Gemini API error: " + e.getStatusCode(), e);
-        } catch (Exception e) {
-            log.error("Failed to call Gemini API", e);
-            throw new GeminiClientException("Failed to call Gemini API", e);
-        }
+        return extractText(generateContent(buildRequestBody(prompt), "market-structure analysis"));
     }
 
     /**
@@ -89,28 +67,133 @@ public class GeminiService {
             throw new IllegalStateException(
                     "GEMINI_API_KEY is not configured; cannot call Gemini API");
         }
-
         String prompt = buildTradeDecisionPrompt(window);
-        Map<String, Object> requestBody = buildRequestBody(prompt);
-        String path = "/v1beta/models/" + properties.getModel() + ":generateContent";
+        return extractText(generateContent(buildRequestBody(prompt), "trade-decision analysis"));
+    }
 
+    /**
+     * Calls the Gemini {@code generateContent} endpoint with the currently
+     * resolved model. On a 404 (model not found for this key/version) it queries
+     * the ListModels API, auto-selects a working model, caches it, and retries
+     * once — so the bot keeps working even when the configured model name is
+     * retired or unavailable for the key.
+     */
+    private Map<String, Object> generateContent(Map<String, Object> requestBody, String context) {
+        String model = effectiveModel();
         try {
-            Map<String, Object> response = geminiWebClient.post()
-                    .uri(path)
+            return callGenerate(model, requestBody);
+        } catch (WebClientResponseException e) {
+            String body = safeBody(e);
+            if (e.getStatusCode().value() == 404) {
+                log.warn("Model '{}' not found for {} (404). Attempting auto-resolution...",
+                        model, context);
+                String working = resolveWorkingModel();
+                if (working != null && !working.equals(model)) {
+                    log.info("Retrying {} with auto-resolved model '{}'", context, working);
+                    try {
+                        return callGenerate(working, requestBody);
+                    } catch (WebClientResponseException e2) {
+                        throw new GeminiClientException(
+                                "Gemini API error: " + e2.getStatusCode() + " " + safeBody(e2), e2);
+                    }
+                }
+            }
+            log.error("Gemini API returned {} for {}: {}", e.getStatusCode(), context, body);
+            throw new GeminiClientException("Gemini API error: " + e.getStatusCode()
+                    + (body.isBlank() ? "" : " " + body), e);
+        } catch (GeminiClientException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to call Gemini API for {}", context, e);
+            throw new GeminiClientException("Failed to call Gemini API: " + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, Object> callGenerate(String model, Map<String, Object> requestBody) {
+        String path = "/v1beta/models/" + model + ":generateContent";
+        return geminiWebClient.post()
+                .uri(path)
+                .header("x-goog-api-key", properties.getApiKey())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
+                .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                .block();
+    }
+
+    private String effectiveModel() {
+        String cached = resolvedModel.get();
+        return (cached != null && !cached.isBlank()) ? cached : properties.getModel();
+    }
+
+    /**
+     * Queries ListModels and picks a model that supports {@code generateContent},
+     * preferring a fast "flash" model, then any generateContent-capable model.
+     * The chosen model name is cached for subsequent calls. Returns {@code null}
+     * when none can be determined.
+     */
+    @SuppressWarnings("unchecked")
+    private synchronized String resolveWorkingModel() {
+        // Another thread may have resolved it while we waited on the lock.
+        String cached = resolvedModel.get();
+        if (cached != null && !cached.isBlank() && !cached.equals(properties.getModel())) {
+            return cached;
+        }
+        try {
+            Map<String, Object> resp = geminiWebClient.get()
+                    .uri("/v1beta/models")
                     .header("x-goog-api-key", properties.getApiKey())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(new org.springframework.core.ParameterizedTypeReference<Map<String, Object>>() {})
                     .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
                     .block();
-            return extractText(response);
-        } catch (WebClientResponseException e) {
-            log.error("Gemini API returned {} for trade-decision analysis", e.getStatusCode(), e);
-            throw new GeminiClientException("Gemini API error: " + e.getStatusCode(), e);
-        } catch (Exception e) {
-            log.error("Failed to call Gemini API", e);
-            throw new GeminiClientException("Failed to call Gemini API", e);
+            if (resp == null) {
+                return null;
+            }
+            List<Map<String, Object>> models = (List<Map<String, Object>>) resp.get("models");
+            if (models == null || models.isEmpty()) {
+                return null;
+            }
+            String best = null;
+            for (Map<String, Object> m : models) {
+                Object methodsObj = m.get("supportedGenerationMethods");
+                boolean supportsGenerate = methodsObj instanceof List<?> methods
+                        && methods.stream().anyMatch(x -> "generateContent".equals(String.valueOf(x)));
+                if (!supportsGenerate) {
+                    continue;
+                }
+                String name = String.valueOf(m.get("name")); // e.g. "models/gemini-2.5-flash"
+                String shortName = name.startsWith("models/") ? name.substring("models/".length()) : name;
+                if (shortName.contains("flash")) {
+                    best = shortName; // prefer a flash model
+                    break;
+                }
+                if (best == null) {
+                    best = shortName; // fallback to first capable model
+                }
+            }
+            if (best != null) {
+                log.info("Auto-resolved Gemini model to '{}'", best);
+                resolvedModel.set(best);
+            }
+            return best;
+        } catch (Exception ex) {
+            log.error("Failed to list Gemini models for auto-resolution: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String safeBody(WebClientResponseException e) {
+        try {
+            String b = e.getResponseBodyAsString();
+            if (b == null) {
+                return "";
+            }
+            b = b.replaceAll("\\s+", " ").trim();
+            return b.length() > 300 ? b.substring(0, 300) + "…" : b;
+        } catch (Exception ignored) {
+            return "";
         }
     }
 
