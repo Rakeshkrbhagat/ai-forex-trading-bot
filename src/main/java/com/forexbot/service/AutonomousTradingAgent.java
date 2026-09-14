@@ -29,6 +29,7 @@ public class AutonomousTradingAgent {
     private final MarketDataService marketDataService;
     private final TickPipelineService pipeline;
     private final ActivityFeedService activityFeed;
+    private final BridgeWebSocketHandler bridgeHandler;
 
     /** Timeframe + depth of the candle window fed to the LLM each cycle. */
     @Value("${agent.timeframe:M15}")
@@ -40,12 +41,14 @@ public class AutonomousTradingAgent {
                                   RiskGuardrailStore guardrailStore,
                                   MarketDataService marketDataService,
                                   TickPipelineService pipeline,
-                                  ActivityFeedService activityFeed) {
+                                  ActivityFeedService activityFeed,
+                                  BridgeWebSocketHandler bridgeHandler) {
         this.stateManager = stateManager;
         this.guardrailStore = guardrailStore;
         this.marketDataService = marketDataService;
         this.pipeline = pipeline;
         this.activityFeed = activityFeed;
+        this.bridgeHandler = bridgeHandler;
     }
 
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
@@ -89,8 +92,11 @@ public class AutonomousTradingAgent {
         for (String symbol : guardrails.allowedSymbols()) {
             var windowOpt = marketDataService.fetchCandles(symbol, timeframe, candles);
             if (windowOpt.isEmpty() || windowOpt.get().isEmpty()) {
-                String msg = "No market data for " + symbol
-                        + " (MT5 bridge offline or symbol unavailable).";
+                String reason = bridgeHandler.hasConnectedBridge()
+                        ? "MT5 terminal not logged in, or " + symbol
+                          + " is not in Market Watch (add it & enable auto-trading)."
+                        : "MT5 bridge is OFFLINE — start mt5_bridge.py and let it connect.";
+                String msg = "No market data for " + symbol + " — " + reason;
                 log.info("Manual cycle: {}", msg);
                 activityFeed.record(symbol, "HOLD", msg);
                 summary.add(symbol + ": no market data");
