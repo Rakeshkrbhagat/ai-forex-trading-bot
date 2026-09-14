@@ -86,6 +86,29 @@ public class AiSettingsStore {
         return (s != null && s.hasTradingStyle()) ? s.tradingStyle() : "INTRADAY";
     }
 
+    /**
+     * Duration of one candle for the selected timeframe, in milliseconds. Used
+     * to pace AI calls so a new request fires roughly once per candle close
+     * (M1 → 1min, M5 → 5min, M15 → 15min, H1 → 1hr, H4 → 4hr, D1 → 1day).
+     * Returns 0 when no timeframe is set (caller applies its own default).
+     */
+    public long timeframeIntervalMs() {
+        String tf = effectiveTimeframe();
+        if (tf == null || tf.isBlank()) {
+            return 0L;
+        }
+        return switch (tf.trim().toUpperCase()) {
+            case "M1" -> 60_000L;
+            case "M5" -> 5 * 60_000L;
+            case "M15" -> 15 * 60_000L;
+            case "M30" -> 30 * 60_000L;
+            case "H1" -> 60 * 60_000L;
+            case "H4" -> 4 * 60 * 60_000L;
+            case "D1" -> 24 * 60 * 60_000L;
+            default -> 0L;
+        };
+    }
+
     public boolean hasApiKey() {
         String key = effectiveApiKey();
         return key != null && !key.isBlank();

@@ -413,7 +413,13 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
     pip = _pip_size(symbol_info)
     deviation = int(signal.get("maxSlippagePoints") or 20)
     magic = int(signal.get("magicNumber") or 0)
-    comment = (signal.get("comment") or "forexbot")[:31]
+    # MT5 only accepts a short, printable-ASCII comment. Non-ASCII characters
+    # (e.g. a unicode dash in the AI rationale) make order_send fail with
+    # 'Invalid "comment" argument', so strip anything outside 0x20-0x7E.
+    raw_comment = str(signal.get("comment") or "forexbot")
+    comment = "".join(ch for ch in raw_comment if 32 <= ord(ch) < 127).strip()[:31]
+    if not comment:
+        comment = "forexbot"
 
     if side == "BUY":
         order_type = mt5.ORDER_TYPE_BUY

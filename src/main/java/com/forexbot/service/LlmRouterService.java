@@ -78,16 +78,21 @@ public class LlmRouterService {
                     + remaining + "s.");
         }
 
-        // Global rate throttle: skip this cycle if we called too recently.
+        // Pace calls by the selected timeframe: one request per candle close
+        // (M1→1min, M5→5min, M15→15min, H1→1hr, …). Fall back to the configured
+        // minimum interval when no timeframe is set.
+        long tfInterval = aiSettings.timeframeIntervalMs();
+        long interval = tfInterval > 0 ? tfInterval : minRequestIntervalMs;
+
         long last = lastRequestAt.get();
-        if (minRequestIntervalMs > 0 && (now - last) < minRequestIntervalMs) {
-            long wait = (minRequestIntervalMs - (now - last)) / 1000 + 1;
+        if (interval > 0 && (now - last) < interval) {
+            long wait = (interval - (now - last)) / 1000 + 1;
             throw new RateLimitedException(
-                    "AI call throttled (min " + (minRequestIntervalMs / 1000)
-                    + "s between calls); skipping ~" + wait + "s to protect the quota.");
+                    "AI call paced to the " + aiSettings.effectiveTimeframe()
+                    + " timeframe; next call in ~" + wait + "s (waiting for the candle to close).");
         }
         // Claim this slot atomically so concurrent symbols don't all fire at once.
-        if (minRequestIntervalMs > 0 && !lastRequestAt.compareAndSet(last, now)) {
+        if (interval > 0 && !lastRequestAt.compareAndSet(last, now)) {
             throw new RateLimitedException(
                     "AI call throttled (another symbol used this cycle's slot); skipping.");
         }
