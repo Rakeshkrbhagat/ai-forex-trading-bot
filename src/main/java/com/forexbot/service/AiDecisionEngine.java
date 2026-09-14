@@ -53,5 +53,14 @@ public class AiDecisionEngine {
             return TradeDecisionSignal.hold(symbol);
         }
     }
+
+    /** Collapse a raw model response to a single, log-friendly line. */
+    private static String oneLine(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String s = raw.replaceAll("\\s+", " ").trim();
+        return s.length() > 500 ? s.substring(0, 500) + "…" : s;
+    }
 }
 
