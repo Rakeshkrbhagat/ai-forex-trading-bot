@@ -21,6 +21,14 @@ public class AiDecisionEngine {
     private final SignalSchemaValidator schemaValidator;
     private final ActivityFeedService activityFeed;
 
+    /**
+     * Minimum confidence required to actually take a trade. Anything below this
+     * is downgraded to HOLD so the bot behaves like a disciplined human trader
+     * that only acts on high-probability setups.
+     */
+    @org.springframework.beans.factory.annotation.Value("${ai.min-confidence:0.65}")
+    private double minConfidence;
+
     public AiDecisionEngine(LlmRouterService llmRouter, SignalSchemaValidator schemaValidator,
                             ActivityFeedService activityFeed) {
         this.llmRouter = llmRouter;
@@ -47,6 +55,19 @@ public class AiDecisionEngine {
             TradeDecisionSignal signal = schemaValidator.parseAndValidate(rawJson);
             log.info("AI decision for {} -> {} (conf {})",
                     symbol, signal.action(), signal.confidenceScore());
+
+            // Discipline gate: only trade high-conviction setups.
+            if (signal.isActionable()) {
+                double conf = signal.confidenceScore() != null ? signal.confidenceScore() : 0.0;
+                if (conf < minConfidence) {
+                    String msg = String.format(
+                            "Low-conviction %s (conf %.2f < %.2f) — holding, no valid high-probability setup.",
+                            signal.action(), conf, minConfidence);
+                    log.info("Discipline gate for {}: {}", symbol, msg);
+                    activityFeed.record(symbol, "HOLD", msg);
+                    return TradeDecisionSignal.hold(symbol);
+                }
+            }
             return signal;
         } catch (SignalSchemaValidator.InvalidSignalException ex) {
             String reason = "LLM output was malformed/invalid: " + ex.getMessage();

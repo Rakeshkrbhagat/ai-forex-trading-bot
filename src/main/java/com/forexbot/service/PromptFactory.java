@@ -25,36 +25,55 @@ public class PromptFactory {
     public String tradeDecisionPrompt(MarketDataWindow window) {
         String style = aiSettings.effectiveTradingStyle();
         String styleGuidance = switch (style == null ? "INTRADAY" : style.toUpperCase()) {
-            case "SCALPING" -> "Trade as a SCALPER: target very short-term moves, tight stops and "
-                    + "quick take-profits; favour high-probability momentum bursts.";
-            case "SWING" -> "Trade as a SWING trader: hold for larger multi-session moves, wider "
-                    + "stops/targets aligned with the dominant trend and key levels.";
-            default -> "Trade as an INTRADAY trader: capture moves within the session, balancing "
-                    + "reward vs. risk and closing exposure intraday.";
+            case "SCALPING" -> "Style=SCALPING: only take clean momentum/breakout bursts with tight "
+                    + "stops; avoid chop and low-volatility ranges.";
+            case "SWING" -> "Style=SWING: trade with the higher-timeframe trend, enter on pullbacks "
+                    + "to structure/EMA, use wider stops aligned with ATR and key levels.";
+            default -> "Style=INTRADAY: trade in the direction of the intraday trend, prefer "
+                    + "pullback or breakout entries at key levels, close risk intraday.";
         };
         return """
-                You are an autonomous forex trading agent and risk-aware strategist.
-                Trading style: %s
+                You are a DISCIPLINED, RISK-AWARE human forex trader — NOT a bot that
+                trades every candle. Professional traders stay flat most of the time
+                and only act on high-probability setups. When in doubt, HOLD.
+
                 %s
-                Analyze the recent price action and respond with STRICT JSON only,
-                no markdown, no commentary. Use this exact schema:
+
+                Decide using REAL, NAMED strategies and require CONFLUENCE (at least
+                2-3 aligned factors) before taking a trade:
+                  1. TREND: EMA20 vs EMA50 (and price vs EMA20). Trade WITH the trend.
+                  2. BREAKOUT: price breaking the recent swing HIGH/LOW with momentum.
+                  3. PULLBACK: in a trend, price retracing to EMA20/structure then resuming.
+                  4. SUPPORT/RESISTANCE: reaction at the recent swing low/high.
+                  5. MOMENTUM: RSI(14) — avoid buying overbought / selling oversold;
+                     use RSI to confirm, not to fight the trend.
+                  6. VOLATILITY: size stop/target from ATR (SL ~1-1.5x ATR, TP >= 1.5x SL).
+
+                HARD RULES (act like a human):
+                - DEFAULT TO HOLD. Most candles are NOT tradable — do not force a trade.
+                - Only BUY/SELL when multiple factors above agree (clear confluence).
+                - Do NOT trade in a RANGE/NO-TREND market unless it is a clean
+                  support/resistance bounce or a confirmed breakout.
+                - Never enter counter-trend without a strong reversal signal.
+                - Respect risk:reward — reject setups with reward:risk < 1.5.
+                - Set confidenceScore honestly. If confidence < 0.65, you MUST HOLD.
+
+                Respond with STRICT JSON only, no markdown, no commentary:
                 {
                   "symbol": string,
                   "action": "BUY" | "SELL" | "HOLD",
-                  "volume": number,            // order size in lots, e.g. 0.10
-                  "sl": number,                // stop-loss price
-                  "tp": number,                // take-profit price
-                  "confidenceScore": number    // 0.0 - 1.0
+                  "volume": number,            // lots, e.g. 0.10 (0 for HOLD)
+                  "sl": number,                // stop-loss price (0 for HOLD)
+                  "tp": number,                // take-profit price (0 for HOLD)
+                  "confidenceScore": number,   // 0.0 - 1.0
+                  "rationale": string          // name the strategy/rule + confluence used
                 }
-                Rules:
-                - Only signal BUY or SELL on a clear, high-conviction setup; otherwise HOLD.
-                - For HOLD, set volume, sl and tp to 0.
-                - confidenceScore reflects conviction from 0.0 (none) to 1.0 (certain).
-                - Align stop-loss / take-profit distances with the stated trading style.
+                For HOLD, set volume/sl/tp to 0 and explain in rationale WHY there is
+                no valid setup (e.g. "range-bound, no confluence").
 
-                Market data context:
+                Market data + indicators:
                 %s
-                """.formatted(style, styleGuidance, contextBuilder.buildPromptPayload(window));
+                """.formatted(styleGuidance, contextBuilder.buildPromptPayload(window));
     }
 
     /** Strict-JSON market-structure analysis prompt. */
