@@ -103,14 +103,14 @@ public class GeminiService implements LlmTransport {
     private Map<String, Object> generateContent(Map<String, Object> requestBody, String context) {
         String model = effectiveModel();
         try {
-            return callGenerate(model, requestBody);
+            return callGenerateWithRetry(model, requestBody, context);
         } catch (WebClientResponseException e) {
             String body = safeBody(e);
             if (e.getStatusCode().value() == 404) {
                 log.warn("Model '{}' not found for {} (404). Attempting auto-resolution...",
                         model, context);
 
-                String suggested = extractSuggestedModelFromError(body);
+                String suggested = extractSuggestedModelFromError(body, model);
                 if (suggested != null && !suggested.equals(model)) {
                     log.info("Retrying {} with provider-suggested model '{}'", context, suggested);
                     resolvedModel.set(suggested);
@@ -141,6 +141,35 @@ public class GeminiService implements LlmTransport {
         } catch (Exception e) {
             log.error("Failed to call Gemini API for {}", context, e);
             throw new GeminiClientException("Failed to call Gemini API: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Retries the call a couple of times on transient overload (503/502/504)
+     * with short exponential backoff — these demand spikes usually clear fast.
+     */
+    private Map<String, Object> callGenerateWithRetry(String model, Map<String, Object> requestBody,
+                                                      String context) {
+        int maxAttempts = 3;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return callGenerate(model, requestBody);
+            } catch (WebClientResponseException e) {
+                int code = e.getStatusCode().value();
+                boolean overloaded = code == 503 || code == 502 || code == 504;
+                if (!overloaded || attempt >= maxAttempts) {
+                    throw e; // non-transient or out of retries → caller handles it.
+                }
+                long backoffMs = 400L * (1L << (attempt - 1)); // 400ms, 800ms
+                log.warn("Transient {} for {} (attempt {}/{}); retrying in {}ms",
+                        code, context, attempt, maxAttempts, backoffMs);
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
         }
     }
 
@@ -333,14 +362,19 @@ public class GeminiService implements LlmTransport {
         return String.valueOf(parts.get(0).get("text"));
     }
 
-    private String extractSuggestedModelFromError(String errorBody) {
+    private String extractSuggestedModelFromError(String errorBody, String currentModel) {
         if (errorBody == null || errorBody.isBlank()) {
             return null;
         }
+        // The 404 body typically mentions BOTH the broken model and the
+        // recommended replacement, e.g. "models/gemini-2.5-flash is no longer
+        // available ... use models/gemini-3.6-flash". Skip the current/broken
+        // model and return the actual recommendation.
         Matcher matcher = MODEL_SUGGESTION_PATTERN.matcher(errorBody);
         while (matcher.find()) {
             String suggested = matcher.group(1);
-            if (suggested != null && !suggested.isBlank()) {
+            if (suggested != null && !suggested.isBlank()
+                    && (currentModel == null || !suggested.equalsIgnoreCase(currentModel))) {
                 return suggested;
             }
         }

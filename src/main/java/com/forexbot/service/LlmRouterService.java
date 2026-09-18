@@ -97,15 +97,19 @@ public class LlmRouterService {
         try {
             return transport.complete(prompt, context);
         } catch (RuntimeException ex) {
-            if (isRateLimit(ex)) {
-                long cooldownMs = Math.max(1, cooldownSeconds) * 1000L;
-                cooldownUntil.set(System.currentTimeMillis() + cooldownMs);
-                log.warn("Provider '{}' returned 429; entering {}s cooldown.",
-                        transport.providerId(), cooldownSeconds);
+            if (isTransient(ex)) {
+                boolean overloaded = isOverloaded(ex);
+                // Server overload (503) usually clears fast; use a shorter pause
+                // than a hard 429 quota block.
+                long secs = overloaded ? Math.min(cooldownSeconds, 20L) : cooldownSeconds;
+                cooldownUntil.set(System.currentTimeMillis() + Math.max(1, secs) * 1000L);
+                String kind = overloaded ? "temporarily unavailable (503, high demand)"
+                        : "rate-limited (429, quota)";
+                log.warn("Provider '{}' {} — cooling down {}s.",
+                        transport.providerId(), kind, secs);
                 throw new RateLimitedException(
-                        "Provider '" + provider + "' quota exceeded (429). Cooling down for "
-                        + cooldownSeconds + "s. Reduce poll frequency, switch model/provider, "
-                        + "or upgrade your plan.", ex);
+                        "Provider '" + provider + "' " + kind + ". Pausing " + secs
+                        + "s, then retrying. If it persists, switch model/provider.", ex);
             }
             throw ex;
         }
@@ -119,6 +123,30 @@ public class LlmRouterService {
     /** Runs the market-structure prompt against the selected provider. */
     public String analyzeMarketStructure(MarketTickRequest tick) {
         return run(promptFactory.marketStructurePrompt(tick), "market-structure analysis");
+    }
+
+    /** True for retryable/transient provider errors: quota (429) or overload (5xx). */
+    private static boolean isTransient(Throwable ex) {
+        return isRateLimit(ex) || isOverloaded(ex);
+    }
+
+    /** True when the provider is temporarily overloaded/unavailable (503/502/504). */
+    private static boolean isOverloaded(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg == null) {
+                continue;
+            }
+            String lower = msg.toLowerCase();
+            if (msg.contains("503") || msg.contains("502") || msg.contains("504")
+                    || lower.contains("unavailable")
+                    || lower.contains("overloaded")
+                    || lower.contains("high demand")
+                    || lower.contains("try again later")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isRateLimit(Throwable ex) {
