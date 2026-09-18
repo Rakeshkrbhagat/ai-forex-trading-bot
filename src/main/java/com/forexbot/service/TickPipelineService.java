@@ -131,7 +131,10 @@ public class TickPipelineService {
         // 2) LLM decision over the full candle window.
         TradeDecisionSignal signal = aiDecisionEngine.decide(window);
         if (!signal.isActionable()) {
-            activityFeed.record(symbol, "HOLD", "AI decision: HOLD (conf " + signal.confidenceScore() + ")");
+            String why = (signal.rationale() != null && !signal.rationale().isBlank())
+                    ? " — " + signal.rationale() : "";
+            activityFeed.record(symbol, "HOLD",
+                    "AI decision: HOLD (conf " + signal.confidenceScore() + ")" + why);
             return PipelineResult.completed(holdSymbol(symbol, "AI decision: HOLD"));
         }
 
@@ -141,7 +144,8 @@ public class TickPipelineService {
                 ? TradeDecision.Action.BUY
                 : TradeDecision.Action.SELL;
         Double entry = window.lastClose();
-        String rationale = "AI window decision (conf " + signal.confidenceScore() + ")";
+        String rationale = "Strategy: " + signal.strategyLabel()
+                + " (conf " + signal.confidenceScore() + ")";
 
         log.info("Executing trade #{} {} on {} ({})", tradeNumber, action, symbol, rationale);
 

@@ -13,16 +13,29 @@ public record TradeDecisionSignal(
         Double volume,
         Double sl,
         Double tp,
-        Double confidenceScore
+        Double confidenceScore,
+        String strategy,
+        String rationale
 ) {
 
     /** Safe default returned on API timeout / malformed output. */
     public static TradeDecisionSignal hold(String symbol) {
-        return new TradeDecisionSignal(symbol, "HOLD", 0.0, 0.0, 0.0, 0.0);
+        return new TradeDecisionSignal(symbol, "HOLD", 0.0, 0.0, 0.0, 0.0, null, null);
     }
 
     public boolean isActionable() {
         return "BUY".equalsIgnoreCase(action) || "SELL".equalsIgnoreCase(action);
+    }
+
+    /** Short human-readable strategy label for the activity console. */
+    public String strategyLabel() {
+        if (strategy != null && !strategy.isBlank()) {
+            return strategy.trim();
+        }
+        if (rationale != null && !rationale.isBlank()) {
+            return rationale.trim();
+        }
+        return "AI setup";
     }
 }
 

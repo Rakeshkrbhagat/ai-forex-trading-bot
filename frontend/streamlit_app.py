@@ -38,101 +38,167 @@ def _inject_theme() -> None:
         <style>
         :root {
             --accent: #00d09c;
+            --accent-2: #2f9bff;
             --accent-red: #f6465d;
             --accent-amber: #f0b90b;
-            --bg: #0b0e11;
-            --panel: #151a21;
-            --panel-2: #1c232c;
-            --border: #262d38;
-            --muted: #8b95a5;
-            --text: #e6e9ef;
+            --bg: #070b12;
+            --bg-2: #0b1220;
+            --panel: #121a27;
+            --panel-2: #18222f;
+            --border: #223047;
+            --border-soft: #1a2436;
+            --muted: #93a1b5;
+            --text: #eef2f8;
         }
-        .stApp { background: radial-gradient(1200px 600px at 20% -10%, #12181f 0%, var(--bg) 55%); }
+
+        /* Layered, professional trading-desk background:
+           deep navy base + soft accent glows + faint grid pattern. */
+        .stApp {
+            background:
+              radial-gradient(1100px 520px at 12% -8%, rgba(47,155,255,0.10) 0%, rgba(47,155,255,0) 60%),
+              radial-gradient(1000px 500px at 100% 0%, rgba(0,208,156,0.10) 0%, rgba(0,208,156,0) 55%),
+              radial-gradient(900px 600px at 50% 120%, rgba(47,155,255,0.06) 0%, rgba(47,155,255,0) 60%),
+              linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
+            background-attachment: fixed;
+        }
+        /* Faint grid overlay for a "market terminal" feel. */
+        .stApp::before {
+            content: "";
+            position: fixed; inset: 0; pointer-events: none; z-index: 0;
+            background-image:
+              linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+            background-size: 42px 42px;
+            mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 80%);
+        }
+        .block-container { position: relative; z-index: 1; }
+
         #MainMenu, footer {visibility: hidden;}
-        /* Keep the header transparent but DO NOT hide it — it hosts the sidebar
-           expand/collapse arrow. Hiding it made the MT5 sidebar unreachable. */
         header[data-testid="stHeader"] { background: transparent; }
-        /* Always keep the sidebar toggle visible & on top. */
         [data-testid="collapsedControl"] { display: block !important; visibility: visible !important; z-index: 1000; }
         [data-testid="stSidebarCollapsedControl"] { display: block !important; visibility: visible !important; z-index: 1000; }
         .block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1280px; }
 
         /* Headings */
         h1, h2, h3, h4 { color: var(--text); font-weight: 700; letter-spacing: -0.01em; }
+        h2, h3 { position: relative; padding-left: 12px; }
+        h2::before, h3::before {
+            content: ""; position: absolute; left: 0; top: 0.15em; bottom: 0.15em;
+            width: 4px; border-radius: 4px;
+            background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+        }
         .stCaption, .st-emotion-cache-1 .stMarkdown p { color: var(--muted); }
 
-        /* Cards / panels */
+        /* Cards / metrics — glassmorphic depth */
         div[data-testid="stMetric"] {
-            background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
+            background: linear-gradient(180deg, rgba(24,34,47,0.92) 0%, rgba(18,26,39,0.92) 100%);
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+            border-radius: 16px;
+            padding: 18px 20px;
+            box-shadow: 0 8px 28px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.03);
+            backdrop-filter: blur(6px);
+            transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
         }
-        div[data-testid="stMetricLabel"] p { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }
-        div[data-testid="stMetricValue"] { color: var(--text); font-weight: 700; }
+        div[data-testid="stMetric"]:hover {
+            transform: translateY(-2px);
+            border-color: rgba(0,208,156,0.45);
+            box-shadow: 0 12px 34px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,208,156,0.15);
+        }
+        div[data-testid="stMetricLabel"] p { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.10em; }
+        div[data-testid="stMetricValue"] { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
 
         /* Buttons */
         .stButton > button, .stFormSubmitButton > button {
-            border-radius: 10px;
+            border-radius: 12px;
             border: 1px solid var(--border);
-            background: var(--panel-2);
+            background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
             color: var(--text);
             font-weight: 600;
+            padding: 0.5rem 0.9rem;
             transition: all .15s ease;
         }
         .stButton > button:hover, .stFormSubmitButton > button:hover {
             border-color: var(--accent);
             color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(0,208,156,0.12);
+            box-shadow: 0 0 0 3px rgba(0,208,156,0.12);
+            transform: translateY(-1px);
         }
         .stFormSubmitButton > button {
             background: linear-gradient(90deg, var(--accent) 0%, #00b487 100%);
             color: #04120d; border: none;
+            box-shadow: 0 6px 18px rgba(0,208,156,0.28);
         }
-        .stFormSubmitButton > button:hover { color: #04120d; filter: brightness(1.05); }
+        .stFormSubmitButton > button:hover { color: #04120d; filter: brightness(1.06); box-shadow: 0 8px 22px rgba(0,208,156,0.4); }
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+            color: #04120d; border: none; box-shadow: 0 6px 18px rgba(0,208,156,0.28);
+        }
+        button:disabled, .stButton > button:disabled { opacity: 0.45 !important; filter: grayscale(0.3); }
 
         /* Inputs */
-        .stTextInput input, .stNumberInput input, .stTextArea textarea {
-            background: var(--panel) !important;
+        .stTextInput input, .stNumberInput input, .stTextArea textarea,
+        div[data-baseweb="select"] > div {
+            background: rgba(9,13,20,0.75) !important;
             border: 1px solid var(--border) !important;
             border-radius: 10px !important;
             color: var(--text) !important;
         }
-        .stTextInput input:focus, .stNumberInput input:focus { border-color: var(--accent) !important; }
-
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background: #0d1116;
-            border-right: 1px solid var(--border);
+        .stTextInput input:focus, .stNumberInput input:focus {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 3px rgba(0,208,156,0.12) !important;
         }
-        section[data-testid="stSidebar"] .stForm { border: 1px solid var(--border); border-radius: 12px; padding: 6px 10px; background: var(--panel); }
+
+        /* Sidebar — panelled with a soft edge glow */
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0c121c 0%, #090e16 100%);
+            border-right: 1px solid var(--border);
+            box-shadow: 8px 0 24px rgba(0,0,0,0.35);
+        }
+        section[data-testid="stSidebar"] .stForm {
+            border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px;
+            background: linear-gradient(180deg, rgba(18,26,39,0.9) 0%, rgba(12,18,28,0.9) 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 6px 18px rgba(0,0,0,0.25);
+        }
 
         /* Alerts */
-        div[data-testid="stAlert"] { border-radius: 12px; border: 1px solid var(--border); }
+        div[data-testid="stAlert"] { border-radius: 12px; border: 1px solid var(--border); backdrop-filter: blur(4px); }
 
         /* Dataframe */
-        div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+        div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
 
         /* Code / console */
-        .stCode, pre { background: #05070a !important; border: 1px solid var(--border) !important; border-radius: 12px !important; }
+        .stCode, pre {
+            background: linear-gradient(180deg, #060a10 0%, #04070b 100%) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 14px !important;
+            box-shadow: inset 0 0 24px rgba(0,0,0,0.5);
+        }
 
-        /* Custom header bar */
+        /* Custom header bar — glass appbar */
         .tb-appbar {
             display:flex; align-items:center; justify-content:space-between;
-            padding: 14px 20px; margin-bottom: 14px;
-            background: linear-gradient(90deg, var(--panel) 0%, var(--panel-2) 100%);
-            border: 1px solid var(--border); border-radius: 16px;
+            padding: 16px 22px; margin-bottom: 16px;
+            background: linear-gradient(90deg, rgba(18,26,39,0.92) 0%, rgba(24,34,47,0.92) 100%);
+            border: 1px solid var(--border); border-radius: 18px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04);
+            backdrop-filter: blur(8px);
         }
-        .tb-brand { display:flex; align-items:center; gap:12px; }
-        .tb-logo { font-size: 1.6rem; }
-        .tb-title { font-size: 1.15rem; font-weight: 700; color: var(--text); line-height:1.1; }
+        .tb-brand { display:flex; align-items:center; gap:14px; }
+        .tb-logo {
+            font-size: 1.5rem; width: 46px; height: 46px; display:flex; align-items:center; justify-content:center;
+            border-radius: 12px; background: linear-gradient(135deg, rgba(0,208,156,0.18), rgba(47,155,255,0.18));
+            border: 1px solid var(--border);
+        }
+        .tb-title { font-size: 1.18rem; font-weight: 800; color: var(--text); line-height:1.1; }
         .tb-sub { font-size: 0.75rem; color: var(--muted); }
-        .tb-pill { padding: 6px 14px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; border:1px solid var(--border); }
-        .tb-pill.ok { color: var(--accent); background: rgba(0,208,156,0.10); border-color: rgba(0,208,156,0.35); }
-        .tb-pill.bad { color: var(--accent-red); background: rgba(246,70,93,0.10); border-color: rgba(246,70,93,0.35); }
-        .tb-pill.warn { color: var(--accent-amber); background: rgba(240,185,11,0.10); border-color: rgba(240,185,11,0.35); }
-        .tb-section { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 8px 0 2px; }
+        .tb-pill { padding: 7px 15px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; border:1px solid var(--border); backdrop-filter: blur(4px); }
+        .tb-pill.ok { color: var(--accent); background: rgba(0,208,156,0.12); border-color: rgba(0,208,156,0.4); box-shadow: 0 0 18px rgba(0,208,156,0.15); }
+        .tb-pill.bad { color: var(--accent-red); background: rgba(246,70,93,0.12); border-color: rgba(246,70,93,0.4); }
+        .tb-pill.warn { color: var(--accent-amber); background: rgba(240,185,11,0.12); border-color: rgba(240,185,11,0.4); }
+        .tb-section {
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted);
+            margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -704,19 +770,21 @@ with st.sidebar:
 
 
 with st.sidebar:
-    st.markdown('<div class="tb-section">MT5 Broker Connection</div>', unsafe_allow_html=True)
+    st.markdown('<div class="tb-section">Step 1 · MT5 Broker Connection</div>', unsafe_allow_html=True)
     _remembered = _mt5_remembered()
+    # Seed fields once from remembered values; afterwards the widget keys keep
+    # them across refreshes/reruns (fixes the "Refresh wipes my inputs" issue).
+    if "mt5_login" not in st.session_state and _remembered.get("login"):
+        st.session_state["mt5_login"] = _remembered.get("login", "")
+    if "mt5_server" not in st.session_state and _remembered.get("server"):
+        st.session_state["mt5_server"] = _remembered.get("server", "")
     _remember_default = bool(_remembered.get("login") or _remembered.get("server"))
     with st.form("mt5_form"):
-        mt5_login = st.text_input(
-            "Account Number", value=_remembered.get("login", ""), placeholder="e.g. 51234567"
-        )
-        mt5_password = st.text_input("Password", value="", type="password")
-        mt5_server = st.text_input(
-            "Server Name", value=_remembered.get("server", ""), placeholder="e.g. The5ers-Live"
-        )
+        mt5_login = st.text_input("Account Number", key="mt5_login", placeholder="e.g. 51234567")
+        mt5_password = st.text_input("Password", key="mt5_password", type="password")
+        mt5_server = st.text_input("Server Name", key="mt5_server", placeholder="e.g. The5ers-Live")
         mt5_remember = st.checkbox(
-            "Remember me", value=_remember_default,
+            "Remember me", value=_remember_default, key="mt5_remember",
             help="Keep account number & server filled after a refresh until you log out.",
         )
         mt5_submit = st.form_submit_button("Connect / Save Credentials", use_container_width=True)
@@ -738,6 +806,7 @@ with st.sidebar:
                         _remember_mt5(mt5_login.strip(), mt5_server.strip())
                     else:
                         _forget_mt5()
+                    st.rerun()
                 else:
                     msg = _format_api_error(resp, f"HTTP {resp.status_code}")
                     st.error(f"Connect failed: {msg}")
@@ -746,10 +815,23 @@ with st.sidebar:
 
     if st.session_state.get("mt5_connected"):
         st.caption("MT5 credentials configured ✅")
+    else:
+        st.caption("Fill MT5 credentials to unlock the next steps.")
+
+# Progressive-enable gating flags.
+_mt5_ready = bool(st.session_state.get("mt5_connected"))
+_ai_ready = bool(
+    st.session_state.get("ai_saved")
+    or (st.session_state.get("_ai_settings") or {}).get("apiKeySet")
+)
+_guardrails_ready = bool(st.session_state.get("guardrails_saved"))
 
 with st.sidebar:
-    st.markdown('<div class="tb-section">AI Model & Strategy</div>', unsafe_allow_html=True)
-    st.caption("Pick the model, supply its API key, and set timeframe / trading style.")
+    st.markdown('<div class="tb-section">Step 2 · AI Model & Strategy</div>', unsafe_allow_html=True)
+    if not _mt5_ready:
+        st.caption("🔒 Locked — connect MT5 first.")
+    else:
+        st.caption("Pick the model, supply its API key, and set timeframe / trading style.")
 
     # Load current settings once so the controls reflect the backend state.
     if "_ai_settings" not in st.session_state:
@@ -771,35 +853,37 @@ with st.sidebar:
         _provider_labels[0],
     )
     ai_provider_label = st.selectbox(
-        "AI Provider", _provider_labels, index=_idx(_provider_labels, _current_label, 0)
+        "AI Provider", _provider_labels, index=_idx(_provider_labels, _current_label, 0),
+        key="ai_provider", disabled=not _mt5_ready,
     )
     ai_provider = AI_PROVIDERS[ai_provider_label]
     _model_options = AI_MODELS_BY_PROVIDER.get(ai_provider, [])
 
     with st.form("ai_settings_form"):
         ai_model = st.selectbox(
-            "AI Model",
-            _model_options,
+            "AI Model", _model_options,
             index=_idx(_model_options, _ai.get("model"), 0),
+            key="ai_model", disabled=not _mt5_ready,
         )
         ai_api_key = st.text_input(
-            "API Key",
-            value="",
-            type="password",
+            "API Key", key="ai_api_key", type="password",
             placeholder=("•••• already set" if _ai.get("apiKeySet") else f"Paste your {ai_provider_label} API key"),
             help="Stored in backend memory only. Leave blank to keep the existing key.",
+            disabled=not _mt5_ready,
         )
         ai_timeframe = st.selectbox(
-            "Timeframe",
-            TIMEFRAME_OPTIONS,
+            "Timeframe", TIMEFRAME_OPTIONS,
             index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
+            key="ai_timeframe", disabled=not _mt5_ready,
         )
         ai_style = st.selectbox(
-            "Trading Type",
-            TRADING_STYLE_OPTIONS,
+            "Trading Type", TRADING_STYLE_OPTIONS,
             index=_idx(TRADING_STYLE_OPTIONS, _ai.get("tradingStyle"), 0),
+            key="ai_style", disabled=not _mt5_ready,
         )
-        ai_submit = st.form_submit_button("Save AI Settings", use_container_width=True)
+        ai_submit = st.form_submit_button(
+            "Save AI Settings", use_container_width=True, disabled=not _mt5_ready
+        )
 
     if ai_submit:
         ai_payload = {
@@ -814,46 +898,62 @@ with st.sidebar:
             resp = post_ai_settings(ai_payload)
             if resp.ok:
                 st.session_state["_ai_settings"] = resp.json() if resp.content else ai_payload
+                st.session_state["ai_saved"] = True
                 st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}")
+                st.rerun()
             else:
                 msg = _format_api_error(resp, f"HTTP {resp.status_code}")
                 st.error(f"AI settings rejected: {msg}")
         except requests.RequestException as exc:
             st.error(_friendly_network_error(exc))
 
-    if _ai.get("apiKeySet"):
+    if _ai.get("apiKeySet") or st.session_state.get("ai_saved"):
         st.caption("API key configured ✅")
 
 with st.sidebar:
-    st.markdown('<div class="tb-section">AI Risk Guardrails</div>', unsafe_allow_html=True)
-    st.caption("Define boundaries; the AI agent trades autonomously within them.")
+    st.markdown('<div class="tb-section">Step 3 · AI Risk Guardrails</div>', unsafe_allow_html=True)
+    if not _ai_ready:
+        st.caption("🔒 Locked — save AI settings first.")
+    else:
+        st.caption("Define boundaries; the AI agent trades autonomously within them.")
+    _gr_disabled = not _ai_ready
     with st.form("guardrails_form"):
-        autonomous_enabled = st.checkbox("Enable Autonomous AI Trading", value=False)
+        autonomous_enabled = st.checkbox(
+            "Enable Autonomous AI Trading", value=True, key="gr_autonomous",
+            disabled=_gr_disabled,
+        )
         max_risk_percent = st.number_input(
-            "Max Risk Per Trade (%)", min_value=0.1, max_value=100.0, value=1.0, step=0.1
+            "Max Risk Per Trade (%)", min_value=0.1, max_value=100.0, value=1.0, step=0.1,
+            key="gr_risk", disabled=_gr_disabled,
         )
         allowed_symbols = st.multiselect(
-            "Trading Pairs", PAIR_OPTIONS, default=["EURUSD", "XAUUSD"]
+            "Trading Pairs", PAIR_OPTIONS, default=["EURUSD", "XAUUSD"],
+            key="gr_symbols", disabled=_gr_disabled,
         )
         lot_size = st.number_input(
             "Lot Size (0 = auto risk-based)",
             min_value=0.0, max_value=100.0, value=0.10, step=0.01, key="gr_lot",
             help="Fixed order size in lots. Set 0 to size automatically from Max Risk % and Stop Loss.",
+            disabled=_gr_disabled,
         )
         max_drawdown_usd = st.number_input(
-            "Max Drawdown (USD)", min_value=1.0, value=500.0, step=10.0
+            "Max Drawdown (USD)", min_value=1.0, value=500.0, step=10.0,
+            key="gr_drawdown", disabled=_gr_disabled,
         )
         gr_stop_loss_pips = st.number_input(
-            "Stop Loss (pips)", min_value=1, max_value=1000, value=20, step=1, key="gr_sl"
+            "Stop Loss (pips)", min_value=1, max_value=1000, value=20, step=1, key="gr_sl",
+            disabled=_gr_disabled,
         )
         gr_take_profit_pips = st.number_input(
-            "Take Profit (pips)", min_value=1, max_value=2000, value=40, step=1, key="gr_tp"
+            "Take Profit (pips)", min_value=1, max_value=2000, value=40, step=1, key="gr_tp",
+            disabled=_gr_disabled,
         )
         account_balance_usd = st.number_input(
-            "Account Balance (USD)", min_value=1.0, value=10000.0, step=100.0
+            "Account Balance (USD)", min_value=1.0, value=10000.0, step=100.0,
+            key="gr_balance", disabled=_gr_disabled,
         )
         guardrails_submit = st.form_submit_button(
-            "Save Risk Guardrails", use_container_width=True
+            "Save Risk Guardrails", use_container_width=True, disabled=_gr_disabled
         )
 
     if guardrails_submit:
@@ -872,14 +972,22 @@ with st.sidebar:
             resp = post_guardrails(guardrails_payload)
             if resp.ok:
                 mode = "AUTONOMOUS" if autonomous_enabled else "manual"
+                st.session_state["guardrails_saved"] = True
                 st.success(f"Guardrails saved ({mode} mode)")
+                st.rerun()
             else:
                 msg = _format_api_error(resp, f"HTTP {resp.status_code}")
                 st.error(f"Guardrails rejected: {msg}")
         except requests.RequestException as exc:
             st.error(_friendly_network_error(exc))
 
-st.subheader("Autonomous Engine")
+    if st.session_state.get("guardrails_saved"):
+        st.caption("Guardrails saved ✅ — you can Start the AI now.")
+
+st.subheader("Step 4 · Autonomous Engine")
+
+if not _guardrails_ready:
+    st.info("🔒 Complete Steps 1–3 (MT5 → AI settings → Guardrails) to enable the engine.")
 
 # Live bot state banner so the operator can see Start/Stop actually took effect.
 _bot_status = st.session_state.get("last_status") or {}
@@ -894,7 +1002,8 @@ st.markdown(
 
 start_col, cycle_col, stop_col, refresh_col = st.columns(4)
 
-if start_col.button("Start AI", use_container_width=True, type="primary"):
+if start_col.button("Start AI", use_container_width=True, type="primary",
+                    disabled=not _guardrails_ready):
     try:
         resp = post_start(st.session_state.get("account_id"))
         if resp.ok:
@@ -916,7 +1025,8 @@ if start_col.button("Start AI", use_container_width=True, type="primary"):
     except requests.RequestException as exc:
         st.error(_friendly_network_error(exc))
 
-if cycle_col.button("Run Cycle Now", use_container_width=True):
+if cycle_col.button("Run Cycle Now", use_container_width=True,
+                    disabled=not _guardrails_ready):
     try:
         resp = post_run_cycle()
         if resp.ok:

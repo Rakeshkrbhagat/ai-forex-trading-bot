@@ -35,12 +35,11 @@ public class LlmRouterService {
     private long cooldownSeconds;
 
     /**
-     * Minimum spacing between ANY two outgoing LLM calls (milliseconds). This
-     * caps the request rate no matter how many symbols/cycles run, keeping the
-     * bot comfortably under free-tier limits. Default is 60s = one call/minute.
-     * Extra calls within the window are skipped (treated as HOLD) rather sent.
+     * Small safety floor between two outgoing LLM calls (milliseconds) to avoid
+     * accidental bursts. The real candle-close pacing is owned by
+     * {@code AutonomousTradingAgent}; this is only a backstop.
      */
-    @Value("${ai.min-request-interval-ms:60000}")
+    @Value("${ai.min-request-interval-ms:3000}")
     private long minRequestIntervalMs;
 
     /** Epoch millis until which LLM calls are short-circuited. */
@@ -78,18 +77,14 @@ public class LlmRouterService {
                     + remaining + "s.");
         }
 
-        // Pace calls by the selected timeframe: one request per candle close
-        // (M1→1min, M5→5min, M15→15min, H1→1hr, …). Fall back to the configured
-        // minimum interval when no timeframe is set.
-        long tfInterval = aiSettings.timeframeIntervalMs();
-        long interval = tfInterval > 0 ? tfInterval : minRequestIntervalMs;
+        // Safety floor only — the agent paces calls to the candle/timeframe.
+        long interval = minRequestIntervalMs;
 
         long last = lastRequestAt.get();
         if (interval > 0 && (now - last) < interval) {
             long wait = (interval - (now - last)) / 1000 + 1;
             throw new RateLimitedException(
-                    "AI call paced to the " + aiSettings.effectiveTimeframe()
-                    + " timeframe; next call in ~" + wait + "s (waiting for the candle to close).");
+                    "AI call throttled (safety floor); retry in ~" + wait + "s.");
         }
         // Claim this slot atomically so concurrent symbols don't all fire at once.
         if (interval > 0 && !lastRequestAt.compareAndSet(last, now)) {

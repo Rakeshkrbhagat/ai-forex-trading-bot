@@ -73,11 +73,23 @@ public class AutonomousTradingAgent {
     /** Guards against repeating the "waiting for open trade" console notice. */
     private volatile boolean openTradeNoticeShown = false;
 
+    /** Epoch millis of the last market evaluation (for candle-close pacing). */
+    private final java.util.concurrent.atomic.AtomicLong lastEvaluatedAt =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
+    /** How long to wait between evaluations = one candle of the selected timeframe. */
+    private long evaluationIntervalMs() {
+        long tf = aiSettings.timeframeIntervalMs();
+        return tf > 0 ? tf : 60_000L; // default: 1 minute
+    }
+
     @Scheduled(fixedDelayString = "${agent.poll-interval-ms:15000}",
             initialDelayString = "${agent.initial-delay-ms:10000}")
     public void tickCycle() {
         RiskGuardrails guardrails = guardrailStore.get();
-        if (!guardrails.autonomousEnabled() || !stateManager.isRunning()) {
+        // Run continuously while the bot is started (Start AI = go). No separate
+        // "autonomous" flag needed — starting the engine means monitor the market.
+        if (!stateManager.isRunning()) {
             return;
         }
         if (guardrails.allowedSymbols() == null || guardrails.allowedSymbols().isEmpty()) {
@@ -101,6 +113,18 @@ public class AutonomousTradingAgent {
             return;
         }
         openTradeNoticeShown = false;
+
+        // Candle-close pacing: evaluate once per candle of the selected timeframe.
+        // Between candles we skip silently (no console spam).
+        long now = System.currentTimeMillis();
+        long interval = evaluationIntervalMs();
+        long last = lastEvaluatedAt.get();
+        if ((now - last) < interval) {
+            return;
+        }
+        if (!lastEvaluatedAt.compareAndSet(last, now)) {
+            return; // another scheduled tick already claimed this candle.
+        }
 
         for (String symbol : guardrails.allowedSymbols()) {
             marketDataService.fetchCandles(symbol, effectiveTimeframe(), candles).ifPresentOrElse(

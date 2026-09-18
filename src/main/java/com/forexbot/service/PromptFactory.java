@@ -66,10 +66,14 @@ public class PromptFactory {
                   "sl": number,                // stop-loss price (0 for HOLD)
                   "tp": number,                // take-profit price (0 for HOLD)
                   "confidenceScore": number,   // 0.0 - 1.0
-                  "rationale": string          // name the strategy/rule + confluence used
+                  "strategy": string,          // SHORT name of the strategy that triggered,
+                                               // e.g. "EMA crossover", "SMC order block",
+                                               // "Resistance breakout", "Trend pullback",
+                                               // "RSI reversal", "Support bounce"
+                  "rationale": string          // 1-2 sentences: the confluence you used
                 }
-                For HOLD, set volume/sl/tp to 0 and explain in rationale WHY there is
-                no valid setup (e.g. "range-bound, no confluence").
+                For HOLD, set volume/sl/tp to 0, strategy to "None" and explain in
+                rationale WHY there is no valid setup (e.g. "range-bound, no confluence").
 
                 Market data + indicators:
                 %s
