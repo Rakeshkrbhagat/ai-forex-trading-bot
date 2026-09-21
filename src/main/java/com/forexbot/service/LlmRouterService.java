@@ -95,10 +95,24 @@ public class LlmRouterService {
         LlmTransport transport = resolveTransport();
         log.debug("Routing {} to provider '{}'", context, transport.providerId());
         try {
-            return transport.complete(prompt, context);
+            String result = transport.complete(prompt, context);
+            // Successful call — clear any in-progress key-rotation streak.
+            aiSettings.resetRotation();
+            return result;
         } catch (RuntimeException ex) {
             if (isTransient(ex)) {
                 boolean overloaded = isOverloaded(ex);
+                // Hard quota block (429): try the next configured API key before
+                // pausing. Free-tier keys each get their own quota, so rotating
+                // lets the bot keep analysing instead of idling for 60s.
+                if (isRateLimit(ex) && aiSettings.rotateApiKey()) {
+                    int keyNo = aiSettings.activeApiKeyIndex() + 1;
+                    log.warn("Provider '{}' rate-limited (429) — switched to backup API key #{} of {}.",
+                            transport.providerId(), keyNo, aiSettings.apiKeyCount());
+                    throw new RateLimitedException(
+                            "Provider '" + provider + "' rate-limited (429). Switched to backup API key #"
+                            + keyNo + "; retrying next cycle.", ex);
+                }
                 // Server overload (503) usually clears fast; use a shorter pause
                 // than a hard 429 quota block.
                 long secs = overloaded ? Math.min(cooldownSeconds, 20L) : cooldownSeconds;

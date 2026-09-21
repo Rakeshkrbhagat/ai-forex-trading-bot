@@ -37,6 +37,8 @@ public class AiConfigController {
         body.put("timeframe", s.timeframe());
         body.put("tradingStyle", s.tradingStyle());
         body.put("apiKeySet", store.hasApiKey());
+        body.put("apiKeyCount", store.apiKeyCount());
+        body.put("activeKeyIndex", store.activeApiKeyIndex());
         return ResponseEntity.ok(body);
     }
 

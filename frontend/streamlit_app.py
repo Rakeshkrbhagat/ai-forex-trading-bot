@@ -859,18 +859,36 @@ with st.sidebar:
     ai_provider = AI_PROVIDERS[ai_provider_label]
     _model_options = AI_MODELS_BY_PROVIDER.get(ai_provider, [])
 
+    # Number of API keys to configure. Multiple free-tier keys let the backend
+    # automatically fail over to the next key when the active one is
+    # rate-limited (HTTP 429 / quota) instead of pausing for 60s.
+    _key_count_default = int(_ai.get("apiKeyCount") or 1) or 1
+    _key_count_default = min(max(_key_count_default, 1), 5)
+    ai_key_count = st.selectbox(
+        "Number of API Keys", [1, 2, 3, 4, 5],
+        index=_key_count_default - 1,
+        key="ai_key_count", disabled=not _mt5_ready,
+        help="Add multiple free-tier keys; the bot rotates to the next one on a 429 rate-limit.",
+    )
+
     with st.form("ai_settings_form"):
         ai_model = st.selectbox(
             "AI Model", _model_options,
             index=_idx(_model_options, _ai.get("model"), 0),
             key="ai_model", disabled=not _mt5_ready,
         )
-        ai_api_key = st.text_input(
-            "API Key", key="ai_api_key", type="password",
-            placeholder=("•••• already set" if _ai.get("apiKeySet") else f"Paste your {ai_provider_label} API key"),
-            help="Stored in backend memory only. Leave blank to keep the existing key.",
-            disabled=not _mt5_ready,
-        )
+        _keys_set = int(_ai.get("apiKeyCount") or 0)
+        ai_api_keys: list[str] = []
+        for _i in range(int(ai_key_count)):
+            _already = _i < _keys_set
+            ai_api_keys.append(
+                st.text_input(
+                    f"API Key #{_i + 1}", key=f"ai_api_key_{_i}", type="password",
+                    placeholder=("•••• already set" if _already else f"Paste {ai_provider_label} API key #{_i + 1}"),
+                    help="Stored in backend memory only. Leave all blank to keep existing keys.",
+                    disabled=not _mt5_ready,
+                )
+            )
         ai_timeframe = st.selectbox(
             "Timeframe", TIMEFRAME_OPTIONS,
             index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
@@ -892,14 +910,16 @@ with st.sidebar:
             "timeframe": ai_timeframe,
             "tradingStyle": ai_style,
         }
-        if ai_api_key.strip():
-            ai_payload["apiKey"] = ai_api_key.strip()
+        _clean_keys = [k.strip() for k in ai_api_keys if k and k.strip()]
+        if _clean_keys:
+            ai_payload["apiKeys"] = _clean_keys
         try:
             resp = post_ai_settings(ai_payload)
             if resp.ok:
                 st.session_state["_ai_settings"] = resp.json() if resp.content else ai_payload
                 st.session_state["ai_saved"] = True
-                st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}")
+                _keys_label = f" · {len(_clean_keys)} key(s)" if _clean_keys else ""
+                st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}{_keys_label}")
                 st.rerun()
             else:
                 msg = _format_api_error(resp, f"HTTP {resp.status_code}")
@@ -908,7 +928,11 @@ with st.sidebar:
             st.error(_friendly_network_error(exc))
 
     if _ai.get("apiKeySet") or st.session_state.get("ai_saved"):
-        st.caption("API key configured ✅")
+        _count = int(_ai.get("apiKeyCount") or 0)
+        if _count > 1:
+            st.caption(f"API keys configured ✅ ({_count} keys · auto fail-over on rate-limit)")
+        else:
+            st.caption("API key configured ✅")
 
 with st.sidebar:
     st.markdown('<div class="tb-section">Step 3 · AI Risk Guardrails</div>', unsafe_allow_html=True)
