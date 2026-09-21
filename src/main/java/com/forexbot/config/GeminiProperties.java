@@ -20,7 +20,7 @@ public class GeminiProperties {
     private String model = "gemini-1.5-flash";
 
     /** Request timeout in seconds. */
-    private int timeoutSeconds = 30;
+    private int timeoutSeconds = 45;
 
     public String getApiKey() {
         return apiKey;

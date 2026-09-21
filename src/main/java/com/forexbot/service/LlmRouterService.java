@@ -102,6 +102,7 @@ public class LlmRouterService {
         } catch (RuntimeException ex) {
             if (isTransient(ex)) {
                 boolean overloaded = isOverloaded(ex);
+                boolean timedOut = isTimeout(ex);
                 // Hard quota block (429): try the next configured API key before
                 // pausing. Free-tier keys each get their own quota, so rotating
                 // lets the bot keep analysing instead of idling for 60s.
@@ -113,12 +114,18 @@ public class LlmRouterService {
                             "Provider '" + provider + "' rate-limited (429). Switched to backup API key #"
                             + keyNo + "; retrying next cycle.", ex);
                 }
-                // Server overload (503) usually clears fast; use a shorter pause
-                // than a hard 429 quota block.
-                long secs = overloaded ? Math.min(cooldownSeconds, 20L) : cooldownSeconds;
+                // Server overload (503) and read timeouts usually clear fast; use
+                // a shorter pause than a hard 429 quota block.
+                long secs = (overloaded || timedOut) ? Math.min(cooldownSeconds, 20L) : cooldownSeconds;
                 cooldownUntil.set(System.currentTimeMillis() + Math.max(1, secs) * 1000L);
-                String kind = overloaded ? "temporarily unavailable (503, high demand)"
-                        : "rate-limited (429, quota)";
+                String kind;
+                if (timedOut) {
+                    kind = "slow to respond (request timed out)";
+                } else if (overloaded) {
+                    kind = "temporarily unavailable (503, high demand)";
+                } else {
+                    kind = "rate-limited (429, quota)";
+                }
                 log.warn("Provider '{}' {} — cooling down {}s.",
                         transport.providerId(), kind, secs);
                 throw new RateLimitedException(
@@ -139,9 +146,32 @@ public class LlmRouterService {
         return run(promptFactory.marketStructurePrompt(tick), "market-structure analysis");
     }
 
-    /** True for retryable/transient provider errors: quota (429) or overload (5xx). */
+    /** True for retryable/transient provider errors: quota (429), overload (5xx) or timeouts. */
     private static boolean isTransient(Throwable ex) {
-        return isRateLimit(ex) || isOverloaded(ex);
+        return isRateLimit(ex) || isOverloaded(ex) || isTimeout(ex);
+    }
+
+    /** True when the call failed due to a read timeout / transient network blip. */
+    private static boolean isTimeout(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof java.util.concurrent.TimeoutException
+                    || t instanceof java.net.SocketException
+                    || t instanceof java.io.IOException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("timeout")
+                        || lower.contains("timed out")
+                        || lower.contains("connection reset")
+                        || lower.contains("connection prematurely closed")
+                        || lower.contains("did not observe any item")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** True when the provider is temporarily overloaded/unavailable (503/502/504). */

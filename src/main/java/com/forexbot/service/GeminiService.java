@@ -163,14 +163,51 @@ public class GeminiService implements LlmTransport {
                 long backoffMs = 400L * (1L << (attempt - 1)); // 400ms, 800ms
                 log.warn("Transient {} for {} (attempt {}/{}); retrying in {}ms",
                         code, context, attempt, maxAttempts, backoffMs);
-                try {
-                    Thread.sleep(backoffMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+                sleepBackoff(backoffMs, e);
+            } catch (RuntimeException e) {
+                // Network read timeout / connection reset — transient, worth a retry.
+                if (!isTimeoutOrNetwork(e) || attempt >= maxAttempts) {
                     throw e;
+                }
+                long backoffMs = 400L * (1L << (attempt - 1)); // 400ms, 800ms
+                log.warn("Transient network/timeout for {} (attempt {}/{}); retrying in {}ms: {}",
+                        context, attempt, maxAttempts, backoffMs, e.getMessage());
+                sleepBackoff(backoffMs, e);
+            }
+        }
+    }
+
+    private void sleepBackoff(long backoffMs, RuntimeException e) {
+        try {
+            Thread.sleep(backoffMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw e;
+        }
+    }
+
+    /** True for read timeouts / connection resets that are safe to retry. */
+    private static boolean isTimeoutOrNetwork(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof java.util.concurrent.TimeoutException
+                    || t instanceof java.net.SocketException
+                    || t instanceof java.io.IOException
+                    || t instanceof io.netty.handler.timeout.ReadTimeoutException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("timeout")
+                        || lower.contains("timed out")
+                        || lower.contains("connection reset")
+                        || lower.contains("connection refused")
+                        || lower.contains("connection prematurely closed")) {
+                    return true;
                 }
             }
         }
+        return false;
     }
 
     private Map<String, Object> callGenerate(String model, Map<String, Object> requestBody) {
