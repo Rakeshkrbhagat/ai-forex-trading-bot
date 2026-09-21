@@ -12,7 +12,8 @@ public class AuthProperties {
 
     private String username = "admin";
     private String password = "changeme";
-    private long tokenTtlMinutes = 60;
+    /** Bearer-token lifetime. Default 7 days so sessions don't drop mid-use. */
+    private long tokenTtlMinutes = 10080;
     /**
      * Secret used to sign stateless bearer tokens. When blank, a stable secret is
      * derived from the credentials so tokens survive backend restarts (important
