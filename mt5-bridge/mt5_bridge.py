@@ -98,6 +98,10 @@ def _derive_ws_url(http_url: str) -> str:
 BACKEND_WS_URL = os.getenv("BACKEND_WS_URL", "") or _derive_ws_url(BACKEND_URL)
 BRIDGE_ID = os.getenv("BRIDGE_ID", "local-mt5-bridge")
 TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "15"))
+# Free-tier hosts (Render) spin a service DOWN after ~15 min of no INBOUND HTTP
+# traffic. WebSocket frames on an existing socket don't reset that idle timer,
+# so the instance sleeps and the socket drops. A periodic HTTP GET keeps it warm.
+KEEPALIVE_INTERVAL = int(os.getenv("BACKEND_KEEPALIVE_SECONDS", "600"))  # 10 min
 
 # Map string timeframes from the backend to MT5 constants (resolved lazily).
 _TIMEFRAME_NAMES = {
@@ -735,6 +739,20 @@ async def _telemetry_pump(ws) -> None:
         await _safe_send(ws, _build_telemetry())
 
 
+async def _keepalive_pump() -> None:
+    """Periodically hit the backend over HTTP so a free-tier host (Render) does
+    not spin the instance down mid-session and sever the WebSocket. Runs off the
+    event loop via a worker thread so it never blocks command handling."""
+    if not BACKEND_URL or KEEPALIVE_INTERVAL <= 0:
+        return
+    while True:
+        await asyncio.sleep(KEEPALIVE_INTERVAL)
+        try:
+            await asyncio.to_thread(_warm_up_backend)
+        except Exception:  # never let keepalive break the session
+            pass
+
+
 def _warm_up_backend() -> None:
     """Wake a sleeping free-tier backend over HTTP so the WS handshake succeeds.
 
@@ -779,11 +797,13 @@ async def _run_ws_session(url: str) -> None:
         })
 
         telemetry_task = asyncio.ensure_future(_telemetry_pump(ws))
+        keepalive_task = asyncio.ensure_future(_keepalive_pump())
         try:
             async for raw_message in ws:
                 await _handle_command(ws, raw_message)
         finally:
             telemetry_task.cancel()
+            keepalive_task.cancel()
 
 
 async def _ws_client_loop() -> None:
