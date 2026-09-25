@@ -29,6 +29,13 @@ public class AiDecisionEngine {
     @org.springframework.beans.factory.annotation.Value("${ai.min-confidence:0.65}")
     private double minConfidence;
 
+    /** Dashboard-selected mode: RULES (no API key) or AI. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private StrategySettingsStore strategySettings;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private RuleBasedStrategyEngine ruleEngine;
+
     public AiDecisionEngine(LlmRouterService llmRouter, SignalSchemaValidator schemaValidator,
                             ActivityFeedService activityFeed) {
         this.llmRouter = llmRouter;
@@ -47,6 +54,15 @@ public class AiDecisionEngine {
         if (window == null || window.isEmpty()) {
             log.warn("No market data for {}; defaulting to HOLD", symbol);
             return TradeDecisionSignal.hold(symbol);
+        }
+
+        // RULES mode: deterministic indicator strategy, no LLM / API key.
+        if (!strategySettings.isAiMode()) {
+            TradeDecisionSignal s = ruleEngine.decide(window);
+            if (!s.isActionable()) {
+                activityFeed.record(symbol, "HOLD", "Rules: " + s.rationale());
+            }
+            return s;
         }
 
         try {

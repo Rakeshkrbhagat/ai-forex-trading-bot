@@ -626,6 +626,32 @@ def post_ai_settings(payload: dict[str, Any]) -> requests.Response:
     )
 
 
+def get_strategy_settings() -> dict[str, Any] | None:
+    """Fetch strategy mode (RULES / AI) and rule-based parameters."""
+    try:
+        resp = _request_with_retry(
+            "GET", f"{BACKEND_BASE_URL}/api/strategy/settings", headers=_auth_headers()
+        )
+    except requests.RequestException:
+        return None
+    if resp.ok:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            return None
+    return None
+
+
+def post_strategy_settings(payload: dict[str, Any]) -> requests.Response:
+    return _request_with_retry(
+        "POST",
+        f"{BACKEND_BASE_URL}/api/strategy/settings",
+        json=payload,
+        headers=_auth_headers(json_body=True),
+    )
+
+
 def post_start(account_id: str | None) -> requests.Response:
     params = {"accountId": account_id} if account_id else None
     return _request_with_retry(
@@ -823,6 +849,7 @@ _mt5_ready = bool(st.session_state.get("mt5_connected"))
 _ai_ready = bool(
     st.session_state.get("ai_saved")
     or (st.session_state.get("_ai_settings") or {}).get("apiKeySet")
+    or str((st.session_state.get("_strategy") or {}).get("mode", "")).upper() == "RULES"
 )
 _guardrails_ready = bool(st.session_state.get("guardrails_saved"))
 
@@ -844,95 +871,173 @@ with st.sidebar:
         except Exception:
             return default
 
-    # Provider select lives OUTSIDE the form so changing it immediately
-    # refreshes the model dropdown for that provider.
-    _provider_labels = list(AI_PROVIDERS.keys())
-    _current_provider_id = _ai.get("provider", "gemini")
-    _current_label = next(
-        (lbl for lbl, pid in AI_PROVIDERS.items() if pid == _current_provider_id),
-        _provider_labels[0],
+    # --- Strategy type selector: Rule-based (no API key) vs AI-based -------
+    if "_strategy" not in st.session_state:
+        st.session_state["_strategy"] = get_strategy_settings() or {"mode": "RULES"}
+    _strat = st.session_state["_strategy"]
+    _mode_labels = {"Rule Based (no API key)": "RULES", "AI Based (LLM)": "AI"}
+    _mode_default = 1 if str(_strat.get("mode", "RULES")).upper() == "AI" else 0
+    _mode_label = st.radio(
+        "Strategy Type", list(_mode_labels.keys()), index=_mode_default,
+        key="strategy_mode", disabled=not _mt5_ready,
+        help="Rule Based uses EMA/RSI/ATR indicators — no API key, no AI errors. "
+             "AI Based sends candles to the selected LLM provider.",
     )
-    ai_provider_label = st.selectbox(
-        "AI Provider", _provider_labels, index=_idx(_provider_labels, _current_label, 0),
-        key="ai_provider", disabled=not _mt5_ready,
-    )
-    ai_provider = AI_PROVIDERS[ai_provider_label]
-    _model_options = AI_MODELS_BY_PROVIDER.get(ai_provider, [])
+    strategy_mode = _mode_labels[_mode_label]
 
-    # Number of API keys to configure. Multiple free-tier keys let the backend
-    # automatically fail over to the next key when the active one is
-    # rate-limited (HTTP 429 / quota) instead of pausing for 60s.
-    _key_count_default = int(_ai.get("apiKeyCount") or 1) or 1
-    _key_count_default = min(max(_key_count_default, 1), 5)
-    ai_key_count = st.selectbox(
-        "Number of API Keys", [1, 2, 3, 4, 5],
-        index=_key_count_default - 1,
-        key="ai_key_count", disabled=not _mt5_ready,
-        help="Add multiple free-tier keys; the bot rotates to the next one on a 429 rate-limit.",
-    )
-
-    with st.form("ai_settings_form"):
-        ai_model = st.selectbox(
-            "AI Model", _model_options,
-            index=_idx(_model_options, _ai.get("model"), 0),
-            key="ai_model", disabled=not _mt5_ready,
+    if strategy_mode == "AI":
+        # Provider select lives OUTSIDE the form so changing it immediately
+        # refreshes the model dropdown for that provider.
+        _provider_labels = list(AI_PROVIDERS.keys())
+        _current_provider_id = _ai.get("provider", "gemini")
+        _current_label = next(
+            (lbl for lbl, pid in AI_PROVIDERS.items() if pid == _current_provider_id),
+            _provider_labels[0],
         )
-        _keys_set = int(_ai.get("apiKeyCount") or 0)
-        ai_api_keys: list[str] = []
-        for _i in range(int(ai_key_count)):
-            _already = _i < _keys_set
-            ai_api_keys.append(
-                st.text_input(
-                    f"API Key #{_i + 1}", key=f"ai_api_key_{_i}", type="password",
-                    placeholder=("•••• already set" if _already else f"Paste {ai_provider_label} API key #{_i + 1}"),
-                    help="Stored in backend memory only. Leave all blank to keep existing keys.",
-                    disabled=not _mt5_ready,
-                )
+        ai_provider_label = st.selectbox(
+            "AI Provider", _provider_labels, index=_idx(_provider_labels, _current_label, 0),
+            key="ai_provider", disabled=not _mt5_ready,
+        )
+        ai_provider = AI_PROVIDERS[ai_provider_label]
+        _model_options = AI_MODELS_BY_PROVIDER.get(ai_provider, [])
+
+        # Number of API keys to configure. Multiple free-tier keys let the backend
+        # automatically fail over to the next key when the active one is
+        # rate-limited (HTTP 429 / quota) instead of pausing for 60s.
+        _key_count_default = int(_ai.get("apiKeyCount") or 1) or 1
+        _key_count_default = min(max(_key_count_default, 1), 5)
+        ai_key_count = st.selectbox(
+            "Number of API Keys", [1, 2, 3, 4, 5],
+            index=_key_count_default - 1,
+            key="ai_key_count", disabled=not _mt5_ready,
+            help="Add multiple free-tier keys; the bot rotates to the next one on a 429 rate-limit.",
+        )
+
+        with st.form("ai_settings_form"):
+            ai_model = st.selectbox(
+                "AI Model", _model_options,
+                index=_idx(_model_options, _ai.get("model"), 0),
+                key="ai_model", disabled=not _mt5_ready,
             )
-        ai_timeframe = st.selectbox(
-            "Timeframe", TIMEFRAME_OPTIONS,
-            index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
-            key="ai_timeframe", disabled=not _mt5_ready,
-        )
-        ai_style = st.selectbox(
-            "Trading Type", TRADING_STYLE_OPTIONS,
-            index=_idx(TRADING_STYLE_OPTIONS, _ai.get("tradingStyle"), 0),
-            key="ai_style", disabled=not _mt5_ready,
-        )
-        ai_submit = st.form_submit_button(
-            "Save AI Settings", use_container_width=True, disabled=not _mt5_ready
-        )
+            _keys_set = int(_ai.get("apiKeyCount") or 0)
+            ai_api_keys: list[str] = []
+            for _i in range(int(ai_key_count)):
+                _already = _i < _keys_set
+                ai_api_keys.append(
+                    st.text_input(
+                        f"API Key #{_i + 1}", key=f"ai_api_key_{_i}", type="password",
+                        placeholder=("•••• already set" if _already else f"Paste {ai_provider_label} API key #{_i + 1}"),
+                        help="Stored in backend memory only. Leave all blank to keep existing keys.",
+                        disabled=not _mt5_ready,
+                    )
+                )
+            ai_timeframe = st.selectbox(
+                "Timeframe", TIMEFRAME_OPTIONS,
+                index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
+                key="ai_timeframe", disabled=not _mt5_ready,
+            )
+            ai_style = st.selectbox(
+                "Trading Type", TRADING_STYLE_OPTIONS,
+                index=_idx(TRADING_STYLE_OPTIONS, _ai.get("tradingStyle"), 0),
+                key="ai_style", disabled=not _mt5_ready,
+            )
+            ai_submit = st.form_submit_button(
+                "Save AI Settings", use_container_width=True, disabled=not _mt5_ready
+            )
 
-    if ai_submit:
-        ai_payload = {
-            "provider": ai_provider,
-            "model": ai_model,
-            "timeframe": ai_timeframe,
-            "tradingStyle": ai_style,
-        }
-        _clean_keys = [k.strip() for k in ai_api_keys if k and k.strip()]
-        if _clean_keys:
-            ai_payload["apiKeys"] = _clean_keys
-        try:
-            resp = post_ai_settings(ai_payload)
-            if resp.ok:
-                st.session_state["_ai_settings"] = resp.json() if resp.content else ai_payload
-                st.session_state["ai_saved"] = True
-                _keys_label = f" · {len(_clean_keys)} key(s)" if _clean_keys else ""
-                st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}{_keys_label}")
-                st.rerun()
+        if ai_submit:
+            ai_payload = {
+                "provider": ai_provider,
+                "model": ai_model,
+                "timeframe": ai_timeframe,
+                "tradingStyle": ai_style,
+            }
+            _clean_keys = [k.strip() for k in ai_api_keys if k and k.strip()]
+            if _clean_keys:
+                ai_payload["apiKeys"] = _clean_keys
+            try:
+                resp = post_ai_settings(ai_payload)
+                if resp.ok:
+                    post_strategy_settings({"mode": "AI"})
+                    st.session_state["_strategy"] = get_strategy_settings() or {"mode": "AI"}
+                    st.session_state["_ai_settings"] = resp.json() if resp.content else ai_payload
+                    st.session_state["ai_saved"] = True
+                    _keys_label = f" · {len(_clean_keys)} key(s)" if _clean_keys else ""
+                    st.success(f"AI settings saved · {ai_provider_label} · {ai_model} · {ai_timeframe} · {ai_style}{_keys_label}")
+                    st.rerun()
+                else:
+                    msg = _format_api_error(resp, f"HTTP {resp.status_code}")
+                    st.error(f"AI settings rejected: {msg}")
+            except requests.RequestException as exc:
+                st.error(_friendly_network_error(exc))
+
+        if _ai.get("apiKeySet") or st.session_state.get("ai_saved"):
+            _count = int(_ai.get("apiKeyCount") or 0)
+            if _count > 1:
+                st.caption(f"API keys configured ✅ ({_count} keys · auto fail-over on rate-limit)")
             else:
-                msg = _format_api_error(resp, f"HTTP {resp.status_code}")
-                st.error(f"AI settings rejected: {msg}")
-        except requests.RequestException as exc:
-            st.error(_friendly_network_error(exc))
+                st.caption("API key configured ✅")
+    else:
+        st.caption("Rule Based strategy: EMA trend + pullback entry, RSI filter, ATR stop-loss.")
+        with st.form("rules_settings_form"):
+            r_timeframe = st.selectbox(
+                "Timeframe", TIMEFRAME_OPTIONS,
+                index=_idx(TIMEFRAME_OPTIONS, _ai.get("timeframe"), 2),
+                key="rules_timeframe", disabled=not _mt5_ready,
+            )
+            _c1, _c2, _c3 = st.columns(3)
+            r_ema_fast = _c1.number_input("EMA Fast", 2, 200, int(_strat.get("emaFast") or 20), key="r_ema_fast")
+            r_ema_slow = _c2.number_input("EMA Slow", 3, 400, int(_strat.get("emaSlow") or 50), key="r_ema_slow")
+            r_ema_trend = _c3.number_input("EMA Trend", 10, 500, int(_strat.get("emaTrend") or 200), key="r_ema_trend")
+            _c4, _c5 = st.columns(2)
+            r_rsi_period = _c4.number_input("RSI Period", 2, 50, int(_strat.get("rsiPeriod") or 14), key="r_rsi_p")
+            r_atr_period = _c5.number_input("ATR Period", 2, 50, int(_strat.get("atrPeriod") or 14), key="r_atr_p")
+            _c6, _c7 = st.columns(2)
+            r_buy_min = _c6.number_input("RSI Buy Min", 0.0, 100.0, float(_strat.get("rsiBuyMin") or 40.0), key="r_bmin")
+            r_buy_max = _c7.number_input("RSI Buy Max", 0.0, 100.0, float(_strat.get("rsiBuyMax") or 70.0), key="r_bmax")
+            _c8, _c9 = st.columns(2)
+            r_sell_min = _c8.number_input("RSI Sell Min", 0.0, 100.0, float(_strat.get("rsiSellMin") or 30.0), key="r_smin")
+            r_sell_max = _c9.number_input("RSI Sell Max", 0.0, 100.0, float(_strat.get("rsiSellMax") or 60.0), key="r_smax")
+            _c10, _c11 = st.columns(2)
+            r_atr_mult = _c10.number_input("SL = ATR ×", 0.1, 10.0, float(_strat.get("atrSlMultiplier") or 1.5), 0.1, key="r_atrm")
+            r_rr = _c11.number_input("Reward : Risk", 0.1, 10.0, float(_strat.get("rewardRisk") or 2.0), 0.1, key="r_rr")
+            rules_submit = st.form_submit_button(
+                "Save Rule Settings", use_container_width=True, disabled=not _mt5_ready
+            )
 
-    if _ai.get("apiKeySet") or st.session_state.get("ai_saved"):
-        _count = int(_ai.get("apiKeyCount") or 0)
-        if _count > 1:
-            st.caption(f"API keys configured ✅ ({_count} keys · auto fail-over on rate-limit)")
-        else:
-            st.caption("API key configured ✅")
+        if rules_submit:
+            rules_payload = {
+                "mode": "RULES",
+                "emaFast": int(r_ema_fast), "emaSlow": int(r_ema_slow), "emaTrend": int(r_ema_trend),
+                "rsiPeriod": int(r_rsi_period), "atrPeriod": int(r_atr_period),
+                "rsiBuyMin": r_buy_min, "rsiBuyMax": r_buy_max,
+                "rsiSellMin": r_sell_min, "rsiSellMax": r_sell_max,
+                "atrSlMultiplier": r_atr_mult, "rewardRisk": r_rr,
+                "minConfluence": int(r_min_conf),
+            }
+            try:
+                resp = post_strategy_settings(rules_payload)
+                if resp.ok:
+                    # Timeframe drives candle pacing; keep current provider/model untouched.
+                    post_ai_settings({
+                        "provider": _ai.get("provider", "gemini"),
+                        "model": _ai.get("model"),
+                        "timeframe": r_timeframe,
+                        "tradingStyle": _ai.get("tradingStyle"),
+                    })
+                    st.session_state["_strategy"] = resp.json()
+                    st.session_state["_ai_settings"] = get_ai_settings() or _ai
+                    st.session_state["ai_saved"] = True
+                    st.success(f"Rule strategy saved · {r_timeframe} · EMA {r_ema_fast}/{r_ema_slow}/{r_ema_trend}")
+                    st.rerun()
+                else:
+                    st.error(f"Rule settings rejected: {_format_api_error(resp, f'HTTP {resp.status_code}')}")
+            except requests.RequestException as exc:
+                st.error(_friendly_network_error(exc))
+
+        if str(_strat.get("mode", "")).upper() == "RULES" and st.session_state.get("ai_saved"):
+            st.caption("Rule Based strategy active ✅ (no API key needed)")
+
 
 with st.sidebar:
     st.markdown('<div class="tb-section">Step 3 · AI Risk Guardrails</div>', unsafe_allow_html=True)
