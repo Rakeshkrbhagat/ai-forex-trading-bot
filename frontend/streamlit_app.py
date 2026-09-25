@@ -1001,6 +1001,11 @@ with st.sidebar:
             _c10, _c11 = st.columns(2)
             r_atr_mult = _c10.number_input("SL = ATR ×", 0.1, 10.0, float(_strat.get("atrSlMultiplier") or 1.5), 0.1, key="r_atrm")
             r_rr = _c11.number_input("Reward : Risk", 0.1, 10.0, float(_strat.get("rewardRisk") or 2.0), 0.1, key="r_rr")
+            r_min_conf = st.number_input(
+                "Min rules that must agree (of 32)", 1, 10, int(_strat.get("minConfluence") or 2),
+                key="r_min_conf",
+                help="1 = most trades (lower quality); 2-3 = balanced; 4+ = few, stronger trades.",
+            )
             rules_submit = st.form_submit_button(
                 "Save Rule Settings", use_container_width=True, disabled=not _mt5_ready
             )
