@@ -38,6 +38,14 @@ public class StrategySettingsStore {
         if (merged.atrSlMultiplier() <= 0 || merged.rewardRisk() <= 0) {
             throw new IllegalArgumentException("ATR multiplier and reward:risk must be > 0");
         }
+        if (merged.sessionStartUtc() < 0 || merged.sessionStartUtc() > 23
+                || merged.sessionEndUtc() < 0 || merged.sessionEndUtc() > 23) {
+            throw new IllegalArgumentException("Session hours must be 0-23 (UTC)");
+        }
+        if (merged.volumeMultiplier() <= 0 || merged.bodyMultiplier() <= 0
+                || merged.erMin() < 0 || merged.erMin() > 1) {
+            throw new IllegalArgumentException("Volume/body multipliers must be > 0 and efficiency must be 0-1");
+        }
         current.set(merged);
         log.info("Strategy settings updated: {}", merged);
         return merged;

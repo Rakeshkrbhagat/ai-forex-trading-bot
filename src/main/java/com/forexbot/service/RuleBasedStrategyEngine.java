@@ -57,15 +57,52 @@ public class RuleBasedStrategyEngine {
             return hold(symbol, "ATR is zero");
         }
 
+        List<Candle> cs = window.candles();
+        double relVol = relativeVolume(cs, 20);
+
+        // ---------------- market-condition filters (UI toggles) ----------------
+        if (on(p.sessionFilter())) {
+            int hour = utcHour(cs.get(i).time());
+            int s = p.sessionStartUtc(), e = p.sessionEndUtc();
+            boolean inside = hour < 0 || (s <= e ? hour >= s && hour < e : hour >= s || hour < e);
+            if (!inside) return hold(symbol, "Session filter: hour " + hour + " UTC outside " + s + "-" + e);
+        }
+        if (on(p.volumeFilter()) && relVol > 0 && relVol < p.volumeMultiplier()) {
+            return hold(symbol, String.format("Volume filter: rel. volume %.2f < %.2f (slow market)",
+                    relVol, p.volumeMultiplier()));
+        }
+        double er = efficiencyRatio(x.c, 10);
+        if (on(p.efficiencyFilter()) && er < p.erMin()) {
+            return hold(symbol, String.format("Efficiency filter: ER %.2f < %.2f (choppy/slow)", er, p.erMin()));
+        }
+        if (on(p.bodyFilter())) {
+            double avgBody = 0;
+            for (int k = i - 20; k < i; k++) avgBody += Math.abs(x.c[k] - x.o[k]);
+            avgBody /= 20;
+            double b = Math.abs(x.c[i] - x.o[i]);
+            if (avgBody > 0 && b < avgBody * p.bodyMultiplier()) {
+                return hold(symbol, String.format("Body filter: body %.5f < %.2f x avg %.5f",
+                        b, p.bodyMultiplier(), avgBody));
+            }
+        }
+
         List<Vote> votes = new ArrayList<>();
         evaluateAll(x, p, votes);
+
+        if (on(p.trendOnly())) {
+            votes.removeIf(v -> v.side().equals("BUY") ? !x.up : !x.down);
+        }
+        if (on(p.vwapFilter())) {
+            double vwap = sessionVwap(cs);
+            if (vwap > 0) votes.removeIf(v -> v.side().equals("BUY") ? x.c[i] <= vwap : x.c[i] >= vwap);
+        }
 
         long buys = votes.stream().filter(v -> v.side().equals("BUY")).count();
         long sells = votes.size() - buys;
         int need = Math.max(1, p.minConfluence());
         String names = String.join(", ", votes.stream().map(v -> v.side() + ":" + v.name()).toList());
-        String ind = String.format("RSI=%.1f ATR=%.5f ADX=%.1f trend=%s", x.rsi[i], atr, x.adx[i],
-                x.up ? "UP" : x.down ? "DOWN" : "FLAT");
+        String ind = String.format("RSI=%.1f ATR=%.5f ADX=%.1f ER=%.2f relVol=%.2f trend=%s", x.rsi[i], atr,
+                x.adx[i], er, relVol, x.up ? "UP" : x.down ? "DOWN" : "FLAT");
         log.info("Rule engine {} -> buys={} sells={} [{}] {}", symbol, buys, sells, names, ind);
 
         String side = null;
@@ -83,7 +120,11 @@ public class RuleBasedStrategyEngine {
         double slDist = atr * p.atrSlMultiplier();
         boolean buy = side.equals("BUY");
         double sl = buy ? entry - slDist : entry + slDist;
-        double tp = buy ? entry + slDist * p.rewardRisk() : entry - slDist * p.rewardRisk();
+        double rr = p.rewardRisk();
+        if (on(p.adaptiveTp()) && relVol > 0 && relVol < 1.0) {
+            rr = Math.max(1.0, rr * Math.max(0.5, relVol)); // slow market -> closer TP
+        }
+        double tp = buy ? entry + slDist * rr : entry - slDist * rr;
         double conf = Math.min(0.95, 0.5 + 0.1 * count);
         String label = votes.stream().filter(v -> v.side().equals(buy ? "BUY" : "SELL"))
                 .map(Vote::name).reduce((a, b) -> a + " + " + b).orElse("Rules");
@@ -316,6 +357,55 @@ public class RuleBasedStrategyEngine {
             }
         }
         return -1;
+    }
+
+    private static boolean on(Boolean b) {
+        return Boolean.TRUE.equals(b);
+    }
+
+    /** Current bar tick volume / average of previous {@code n} bars (0 if unavailable). */
+    private static double relativeVolume(List<Candle> cs, int n) {
+        int i = cs.size() - 1;
+        if (i < n) return 0;
+        double sum = 0;
+        for (int k = i - n; k < i; k++) sum += cs.get(k).tickVolume();
+        double avg = sum / n;
+        return avg <= 0 ? 0 : cs.get(i).tickVolume() / avg;
+    }
+
+    /** Kaufman efficiency ratio: |net move| / sum of |bar moves|. 1 = clean trend, ~0 = chop. */
+    private static double efficiencyRatio(double[] c, int n) {
+        int i = c.length - 1;
+        if (i < n) return 1;
+        double path = 0;
+        for (int k = i - n + 1; k <= i; k++) path += Math.abs(c[k] - c[k - 1]);
+        return path == 0 ? 0 : Math.abs(c[i] - c[i - n]) / path;
+    }
+
+    /** Volume-weighted average price since the start of the current UTC day. */
+    private static double sessionVwap(List<Candle> cs) {
+        String day = dayOf(cs.get(cs.size() - 1).time());
+        double pv = 0, vol = 0;
+        for (int k = cs.size() - 1; k >= 0; k--) {
+            Candle cd = cs.get(k);
+            if (day != null && !day.equals(dayOf(cd.time()))) break;
+            double w = Math.max(1, cd.tickVolume());
+            pv += (cd.high() + cd.low() + cd.close()) / 3 * w;
+            vol += w;
+        }
+        return vol == 0 ? 0 : pv / vol;
+    }
+
+    private static String dayOf(String iso) {
+        return iso != null && iso.length() >= 10 ? iso.substring(0, 10) : null;
+    }
+
+    private static int utcHour(String iso) {
+        try {
+            return java.time.OffsetDateTime.parse(iso).withOffsetSameInstant(java.time.ZoneOffset.UTC).getHour();
+        } catch (Exception e) {
+            try { return Integer.parseInt(iso.substring(11, 13)); } catch (Exception ignored) { return -1; }
+        }
     }
 
     private static void add(List<Vote> v, String side, String name) {

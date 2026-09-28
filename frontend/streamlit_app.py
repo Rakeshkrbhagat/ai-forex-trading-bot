@@ -1019,6 +1019,12 @@ with st.sidebar:
                 "rsiSellMin": r_sell_min, "rsiSellMax": r_sell_max,
                 "atrSlMultiplier": r_atr_mult, "rewardRisk": r_rr,
                 "minConfluence": int(r_min_conf),
+                "volumeFilter": bool(r_vol_on), "volumeMultiplier": float(r_vol_mult),
+                "sessionFilter": bool(r_sess_on), "sessionStartUtc": int(r_sess_s), "sessionEndUtc": int(r_sess_e),
+                "efficiencyFilter": bool(r_er_on), "erMin": float(r_er_min),
+                "bodyFilter": bool(r_body_on), "bodyMultiplier": float(r_body_mult),
+                "trendOnly": bool(r_trend_only), "vwapFilter": bool(r_vwap_on),
+                "adaptiveTp": bool(r_adapt_tp),
             }
             try:
                 resp = post_strategy_settings(rules_payload)
