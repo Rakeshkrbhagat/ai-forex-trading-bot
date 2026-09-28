@@ -1006,6 +1006,32 @@ with st.sidebar:
                 key="r_min_conf",
                 help="1 = most trades (lower quality); 2-3 = balanced; 4+ = few, stronger trades.",
             )
+            st.markdown("**Market-condition filters** (switch ON/OFF · no ATR/RSI used)")
+            r_vol_on = st.toggle("Volume filter", bool(_strat.get("volumeFilter")), key="r_vol_on",
+                                 help="Skip bars whose tick volume is below X × 20-bar average (slow market).")
+            r_vol_mult = st.number_input("Min volume × average", 0.1, 5.0,
+                                         float(_strat.get("volumeMultiplier") or 1.2), 0.1, key="r_vol_mult")
+            r_sess_on = st.toggle("Session filter (UTC hours)", bool(_strat.get("sessionFilter")), key="r_sess_on",
+                                  help="Trade only during active hours. London+NY ≈ 7–20 UTC.")
+            _s1, _s2 = st.columns(2)
+            _ss = _strat.get("sessionStartUtc")
+            _se = _strat.get("sessionEndUtc")
+            r_sess_s = _s1.number_input("Start hour", 0, 23, int(_ss if _ss is not None else 7), key="r_sess_s")
+            r_sess_e = _s2.number_input("End hour", 0, 23, int(_se if _se is not None else 20), key="r_sess_e")
+            r_er_on = st.toggle("Efficiency (chop) filter", bool(_strat.get("efficiencyFilter")), key="r_er_on",
+                                help="Kaufman efficiency ratio over 10 bars; low value = choppy/slow price.")
+            r_er_min = st.number_input("Min efficiency (0-1)", 0.0, 1.0,
+                                       float(_strat.get("erMin") or 0.3), 0.05, key="r_er_min")
+            r_body_on = st.toggle("Candle body filter", bool(_strat.get("bodyFilter")), key="r_body_on",
+                                  help="Signal candle body must be ≥ X × 20-bar average body.")
+            r_body_mult = st.number_input("Min body × average", 0.1, 5.0,
+                                          float(_strat.get("bodyMultiplier") or 1.0), 0.1, key="r_body_mult")
+            r_trend_only = st.toggle("Trend-only trades", bool(_strat.get("trendOnly")), key="r_trend_only",
+                                     help="Ignore BUY signals in a downtrend and SELL signals in an uptrend.")
+            r_vwap_on = st.toggle("VWAP filter", bool(_strat.get("vwapFilter")), key="r_vwap_on",
+                                  help="BUY only above today's VWAP, SELL only below.")
+            r_adapt_tp = st.toggle("Adaptive TP (slow market)", bool(_strat.get("adaptiveTp")), key="r_adapt_tp",
+                                   help="Bring TP closer when volume is below average.")
             rules_submit = st.form_submit_button(
                 "Save Rule Settings", use_container_width=True, disabled=not _mt5_ready
             )
