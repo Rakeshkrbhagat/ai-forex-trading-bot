@@ -34,11 +34,18 @@ public record StrategySettings(
         Boolean vwapFilter,        // BUY only above session VWAP, SELL only below
         Boolean bodyFilter,        // signal candle body >= bodyMultiplier x 20-bar avg body
         Double bodyMultiplier,
-        Boolean adaptiveTp         // shrink TP when volume is below average (slow market)
+        Boolean adaptiveTp,        // slow regime -> use slowRewardRisk instead of rewardRisk
+        Double slowRewardRisk,     // R:R used in a slow regime (e.g. 1.2)
+        Boolean structureSl,       // SL beyond last swing high/low instead of ATR distance
+        Boolean breakEven,         // move SL to entry once price covers beTriggerPct of TP distance
+        Double beTriggerPct,       // 0.5 = half way to TP
+        Boolean trailSwing,        // after break-even, trail SL behind swing points
+        Boolean regimeRules        // slow regime -> disable breakout rules, keep pullback/SMC rules
 ) {
     public static StrategySettings defaults(String mode, double atrSl, double rr) {
         return new StrategySettings(mode, 20, 50, 200, 14, 40.0, 70.0, 30.0, 60.0, 14, atrSl, rr, 2,
-                false, 1.2, false, 7, 20, false, 0.3, false, false, false, 1.0, false);
+                false, 1.2, false, 7, 20, false, 0.3, false, false, false, 1.0, false,
+                1.2, false, false, 0.5, false, false);
     }
 
     public boolean isAi() {
@@ -72,7 +79,13 @@ public record StrategySettings(
                 vwapFilter != null ? vwapFilter : base.vwapFilter(),
                 bodyFilter != null ? bodyFilter : base.bodyFilter(),
                 bodyMultiplier != null ? bodyMultiplier : base.bodyMultiplier(),
-                adaptiveTp != null ? adaptiveTp : base.adaptiveTp());
+                adaptiveTp != null ? adaptiveTp : base.adaptiveTp(),
+                slowRewardRisk != null ? slowRewardRisk : base.slowRewardRisk(),
+                structureSl != null ? structureSl : base.structureSl(),
+                breakEven != null ? breakEven : base.breakEven(),
+                beTriggerPct != null ? beTriggerPct : base.beTriggerPct(),
+                trailSwing != null ? trailSwing : base.trailSwing(),
+                regimeRules != null ? regimeRules : base.regimeRules());
     }
 }
 

@@ -1031,7 +1031,20 @@ with st.sidebar:
             r_vwap_on = st.toggle("VWAP filter", bool(_strat.get("vwapFilter")), key="r_vwap_on",
                                   help="BUY only above today's VWAP, SELL only below.")
             r_adapt_tp = st.toggle("Adaptive TP (slow market)", bool(_strat.get("adaptiveTp")), key="r_adapt_tp",
-                                   help="Bring TP closer when volume is below average.")
+                                   help="In a SLOW regime use the lower Reward:Risk below so TP is actually reached.")
+            r_slow_rr = st.number_input("Slow-market Reward : Risk", 0.5, 5.0,
+                                        float(_strat.get("slowRewardRisk") or 1.2), 0.1, key="r_slow_rr")
+            r_regime = st.toggle("Regime-based rule sets", bool(_strat.get("regimeRules")), key="r_regime",
+                                 help="In a SLOW regime switch off breakout rules; keep pullback & SMC (OB/FVG/OTE).")
+            st.markdown("**Trade management**")
+            r_struct_sl = st.toggle("Structure-based stop-loss", bool(_strat.get("structureSl")), key="r_struct_sl",
+                                    help="Place SL beyond the last swing high/low instead of a fixed distance.")
+            r_be = st.toggle("Break-even", bool(_strat.get("breakEven")), key="r_be",
+                             help="Move SL to entry once price covers the trigger fraction of the TP distance.")
+            r_be_pct = st.number_input("Break-even trigger (fraction of TP)", 0.1, 0.9,
+                                       float(_strat.get("beTriggerPct") or 0.5), 0.05, key="r_be_pct")
+            r_trail = st.toggle("Trail stop behind swing points", bool(_strat.get("trailSwing")), key="r_trail",
+                                help="After break-even, trail SL behind new swing lows/highs. Needs the updated MT5 bridge.")
             rules_submit = st.form_submit_button(
                 "Save Rule Settings", use_container_width=True, disabled=not _mt5_ready
             )
@@ -1051,6 +1064,9 @@ with st.sidebar:
                 "bodyFilter": bool(r_body_on), "bodyMultiplier": float(r_body_mult),
                 "trendOnly": bool(r_trend_only), "vwapFilter": bool(r_vwap_on),
                 "adaptiveTp": bool(r_adapt_tp),
+                "slowRewardRisk": float(r_slow_rr), "regimeRules": bool(r_regime),
+                "structureSl": bool(r_struct_sl), "breakEven": bool(r_be),
+                "beTriggerPct": float(r_be_pct), "trailSwing": bool(r_trail),
             }
             try:
                 resp = post_strategy_settings(rules_payload)

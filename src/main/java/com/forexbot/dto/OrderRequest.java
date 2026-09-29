@@ -15,12 +15,16 @@ public record OrderRequest(
         int stopLossPips,
         int takeProfitPips,
         Double entryPrice,
-        Double stopLossPrice,
-        Double takeProfitPrice,
+        @com.fasterxml.jackson.annotation.JsonProperty("sl") Double stopLossPrice,
+        @com.fasterxml.jackson.annotation.JsonProperty("tp") Double takeProfitPrice,
         int maxSlippagePoints,
         long magicNumber,
         String comment,
-        Mt5Credentials credentials
+        Mt5Credentials credentials,
+        boolean breakEven,
+        double beTriggerPct,
+        boolean trailSwing,
+        String timeframe
 ) {
 }
 

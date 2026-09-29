@@ -559,12 +559,132 @@ def execute_ai_trade(signal: dict) -> tuple[dict, int]:
     if accepted:
         log.info("FILLED ticket=%s price=%.*f slippage=%.2f pips",
                  response["orderTicket"], symbol_info.digits, result.price, slippage_pips)
+        if signal.get("breakEven") or signal.get("trailSwing"):
+            _register_managed(response["orderTicket"], signal, side, result.price,
+                              base_payload["sl"], base_payload["tp"])
     else:
         # Specific handling for common broker rejections (requote / closed market).
         log.warning("REJECTED retcode=%s (%s) comment=%s",
                     result.retcode, reason, result.comment)
 
     return response, (200 if accepted else 422)
+
+
+# --------------------------------------------------------------------------- #
+# 3b. Trade management: break-even + swing trailing stop
+# --------------------------------------------------------------------------- #
+_MANAGED: dict = {}
+_MANAGED_LOCK = threading.Lock()
+MANAGE_INTERVAL = int(os.getenv("MANAGE_INTERVAL_SECONDS", "5"))
+
+
+def _register_managed(ticket, signal: dict, side: str, entry: float, sl: float, tp: float) -> None:
+    if not ticket or not tp:
+        return
+    with _MANAGED_LOCK:
+        _MANAGED[int(ticket)] = {
+            "side": side,
+            "tp": float(tp),
+            "breakEven": bool(signal.get("breakEven")),
+            "beTrigger": float(signal.get("beTriggerPct") or 0.5),
+            "trailSwing": bool(signal.get("trailSwing")),
+            "timeframe": signal.get("timeframe") or "M15",
+            "beDone": False,
+        }
+    log.info("Managing ticket %s (BE=%s trail=%s)", ticket, signal.get("breakEven"), signal.get("trailSwing"))
+
+
+def _modify_sl(pos, new_sl: float, digits: int) -> bool:
+    res = mt5.order_send({
+        "action": int(mt5.TRADE_ACTION_SLTP),
+        "symbol": pos.symbol,
+        "position": int(pos.ticket),
+        "sl": float(round(new_sl, digits)),
+        "tp": float(pos.tp),
+    })
+    ok = res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
+    if not ok:
+        log.warning("SL modify failed for %s: %s", pos.ticket,
+                    getattr(res, "comment", None) or mt5.last_error())
+    return ok
+
+
+def _last_swing(symbol: str, timeframe: str, side: str):
+    rates = mt5.copy_rates_from_pos(symbol, _resolve_timeframe(timeframe), 1, 40)
+    if rates is None or len(rates) < 5:
+        return None
+    lows = [float(r["low"]) for r in rates]
+    highs = [float(r["high"]) for r in rates]
+    for k in range(len(rates) - 3, 1, -1):
+        if side == "BUY":
+            if lows[k] < lows[k - 1] and lows[k] < lows[k - 2] and lows[k] <= lows[k + 1] and lows[k] <= lows[k + 2]:
+                return lows[k]
+        elif highs[k] > highs[k - 1] and highs[k] > highs[k - 2] and highs[k] >= highs[k + 1] and highs[k] >= highs[k + 2]:
+            return highs[k]
+    return None
+
+
+def _manage_positions_once() -> None:
+    if mt5 is None or not _MANAGED:
+        return
+    positions = mt5.positions_get() or []
+    open_tickets = {int(p.ticket) for p in positions}
+    with _MANAGED_LOCK:
+        for t in list(_MANAGED):
+            if t not in open_tickets:
+                _MANAGED.pop(t, None)
+        items = dict(_MANAGED)
+    for pos in positions:
+        cfg = items.get(int(pos.ticket))
+        if not cfg:
+            continue
+        info = mt5.symbol_info(pos.symbol)
+        if info is None:
+            continue
+        buy = cfg["side"] == "BUY"
+        cur, entry = pos.price_current, pos.price_open
+        tp_dist = abs(cfg["tp"] - entry)
+        progress = ((cur - entry) if buy else (entry - cur)) / tp_dist if tp_dist else 0
+        sl = pos.sl or 0.0
+        buffer = max(info.point * 10, (info.spread or 0) * info.point)
+
+        # 1) Break-even once price covers beTrigger of the TP distance.
+        if cfg["breakEven"] and not cfg["beDone"] and progress >= cfg["beTrigger"]:
+            be = entry + buffer if buy else entry - buffer
+            if (buy and be > sl) or (not buy and (sl == 0 or be < sl)):
+                if _modify_sl(pos, be, info.digits):
+                    log.info("Break-even set for %s at %s", pos.ticket, be)
+                    sl = be
+            cfg["beDone"] = True
+            with _MANAGED_LOCK:
+                if int(pos.ticket) in _MANAGED:
+                    _MANAGED[int(pos.ticket)]["beDone"] = True
+
+        # 2) Trail behind swing points after break-even.
+        if cfg["trailSwing"] and (cfg["beDone"] or (not cfg["breakEven"] and progress >= cfg["beTrigger"])):
+            swing = _last_swing(pos.symbol, cfg["timeframe"], cfg["side"])
+            if swing is None:
+                continue
+            new_sl = swing - buffer if buy else swing + buffer
+            better = (buy and new_sl > sl and new_sl < cur) or \
+                     (not buy and (sl == 0 or new_sl < sl) and new_sl > cur)
+            if better and _modify_sl(pos, new_sl, info.digits):
+                log.info("Trailing SL for %s moved to swing %s", pos.ticket, new_sl)
+
+
+def _manager_loop() -> None:
+    import time
+    while True:
+        try:
+            _manage_positions_once()
+        except Exception as exc:  # never crash the bridge
+            log.warning("Position manager error: %s", exc)
+        time.sleep(MANAGE_INTERVAL)
+
+
+def start_position_manager() -> None:
+    threading.Thread(target=_manager_loop, name="position-manager", daemon=True).start()
+    log.info("Position manager started (every %ss)", MANAGE_INTERVAL)
 
 
 # --------------------------------------------------------------------------- #
@@ -938,5 +1058,6 @@ if __name__ == "__main__":
     log.info("Starting MT5 bridge on %s:%s", HOST, PORT)
     # Launch the cloud-to-local execution pipeline alongside the REST server.
     start_ws_bridge()
+    start_position_manager()
     app.run(host=HOST, port=PORT)
 

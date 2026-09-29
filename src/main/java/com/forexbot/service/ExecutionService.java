@@ -32,10 +32,16 @@ public class ExecutionService {
     private final Mt5CredentialStore credentialStore;
     private final BridgeWebSocketHandler bridgeHandler;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final StrategySettingsStore strategyStore;
+    private final AiSettingsStore aiSettingsStore;
 
     public ExecutionService(ExecutionProperties properties, Mt5CredentialStore credentialStore,
                             BridgeWebSocketHandler bridgeHandler,
-                            com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+                            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                            StrategySettingsStore strategyStore,
+                            AiSettingsStore aiSettingsStore) {
+        this.strategyStore = strategyStore;
+        this.aiSettingsStore = aiSettingsStore;
         this.properties = properties;
         this.credentialStore = credentialStore;
         this.bridgeHandler = bridgeHandler;
@@ -64,6 +70,8 @@ public class ExecutionService {
 
         double lots = volume > 0 ? volume : properties.getDefaultVolumeLots();
         com.forexbot.dto.Mt5Credentials credentials = credentialStore.get().orElse(null);
+        com.forexbot.dto.StrategySettings s = strategyStore.get();
+        String tf = aiSettingsStore.effectiveTimeframe();
         OrderRequest order = new OrderRequest(
                 decision.currencyPair(),
                 decision.action().name(),
@@ -76,7 +84,11 @@ public class ExecutionService {
                 properties.getMaxSlippagePoints(),
                 properties.getMagicNumber(),
                 "forexbot:" + decision.rationale(),
-                credentials
+                credentials,
+                s != null && Boolean.TRUE.equals(s.breakEven()),
+                s != null && s.beTriggerPct() != null ? s.beTriggerPct() : 0.5,
+                s != null && Boolean.TRUE.equals(s.trailSwing()),
+                tf != null ? tf : "M15"
         );
 
         if (!properties.isEnabled()) {

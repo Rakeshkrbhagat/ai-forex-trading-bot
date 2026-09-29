@@ -86,9 +86,15 @@ public class RuleBasedStrategyEngine {
             }
         }
 
+        // Regime detection (volume / efficiency / candle bodies; no ATR/RSI).
+        boolean slow = isSlowRegime(x, relVol, er);
+
         List<Vote> votes = new ArrayList<>();
         evaluateAll(x, p, votes);
 
+        if (on(p.regimeRules()) && slow) {
+            votes.removeIf(v -> BREAKOUT_RULES.contains(v.name()));
+        }
         if (on(p.trendOnly())) {
             votes.removeIf(v -> v.side().equals("BUY") ? !x.up : !x.down);
         }
@@ -102,7 +108,7 @@ public class RuleBasedStrategyEngine {
         int need = Math.max(1, p.minConfluence());
         String names = String.join(", ", votes.stream().map(v -> v.side() + ":" + v.name()).toList());
         String ind = String.format("RSI=%.1f ATR=%.5f ADX=%.1f ER=%.2f relVol=%.2f trend=%s", x.rsi[i], atr,
-                x.adx[i], er, relVol, x.up ? "UP" : x.down ? "DOWN" : "FLAT");
+                x.adx[i], er, relVol, x.up ? "UP" : x.down ? "DOWN" : "FLAT") + (slow ? " regime=SLOW" : " regime=NORMAL");
         log.info("Rule engine {} -> buys={} sells={} [{}] {}", symbol, buys, sells, names, ind);
 
         String side = null;
@@ -117,14 +123,28 @@ public class RuleBasedStrategyEngine {
         }
 
         double entry = x.c[i];
-        double slDist = atr * p.atrSlMultiplier();
+        double atrDist = atr * p.atrSlMultiplier();
+        double slDist = atrDist;
         boolean buy = side.equals("BUY");
+        String slMode = "ATR";
+        if (on(p.structureSl())) {
+            int sw = buy ? lastSwingLow(x.l, i, 30) : lastSwingHigh(x.h, i, 30);
+            if (sw >= 0) {
+                double buffer = atr * 0.2;
+                double level = buy ? x.l[sw] - buffer : x.h[sw] + buffer;
+                double d = buy ? entry - level : level - entry;
+                // Only accept a sane structural stop (not too tight, not huge).
+                if (d > atr * 0.5 && d < atrDist * 3) { slDist = d; slMode = "swing"; }
+            }
+        }
         double sl = buy ? entry - slDist : entry + slDist;
         double rr = p.rewardRisk();
-        if (on(p.adaptiveTp()) && relVol > 0 && relVol < 1.0) {
-            rr = Math.max(1.0, rr * Math.max(0.5, relVol)); // slow market -> closer TP
+        if (on(p.adaptiveTp()) && slow) {
+            double slowRr = p.slowRewardRisk() != null ? p.slowRewardRisk() : 1.2;
+            rr = Math.min(rr, Math.max(0.5, slowRr)); // slow regime -> reachable TP
         }
         double tp = buy ? entry + slDist * rr : entry - slDist * rr;
+        ind = ind + String.format(" regime=%s SL=%s RR=%.2f", slow ? "SLOW" : "NORMAL", slMode, rr);
         double conf = Math.min(0.95, 0.5 + 0.1 * count);
         String label = votes.stream().filter(v -> v.side().equals(buy ? "BUY" : "SELL"))
                 .map(Vote::name).reduce((a, b) -> a + " + " + b).orElse("Rules");
@@ -361,6 +381,30 @@ public class RuleBasedStrategyEngine {
 
     private static boolean on(Boolean b) {
         return Boolean.TRUE.equals(b);
+    }
+
+    /** Breakout / momentum rules that tend to fail in slow markets. */
+    private static final java.util.Set<String> BREAKOUT_RULES = java.util.Set.of(
+            "EMA crossover", "EMA 9/21 cross", "MACD zero cross", "Bollinger breakout", "Squeeze breakout",
+            "Donchian breakout", "Inside bar breakout", "Three soldiers", "Three crows", "Trend EMA cross",
+            "Momentum cross", "Keltner breakout", "Breakout retest", "Breakdown retest",
+            "Volatility expansion", "SMC BOS");
+
+    /**
+     * Slow regime when at least 2 of 3 agree: relative tick volume below 1.0,
+     * efficiency ratio below 0.3, or recent 5-bar average body below 0.8x the 20-bar average body.
+     */
+    private static boolean isSlowRegime(Ind x, double relVol, double er) {
+        int i = x.n - 1;
+        double b5 = 0, b20 = 0;
+        for (int k = i - 4; k <= i; k++) b5 += Math.abs(x.c[k] - x.o[k]);
+        for (int k = i - 19; k <= i; k++) b20 += Math.abs(x.c[k] - x.o[k]);
+        b5 /= 5; b20 /= 20;
+        int score = 0;
+        if (relVol > 0 && relVol < 1.0) score++;
+        if (er < 0.3) score++;
+        if (b20 > 0 && b5 < 0.8 * b20) score++;
+        return score >= 2;
     }
 
     /** Current bar tick volume / average of previous {@code n} bars (0 if unavailable). */
